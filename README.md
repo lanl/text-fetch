@@ -97,14 +97,14 @@ python pdf_to_jats.py Manuscripts --out pdf_index.csv --save-tei --save-jats --v
 Process PDFs with OCR support, resolve PMID/PMCID from DOIs, and create a tar.gz archive of JATS files:
 
 ```bash
-python pdf_to_jats.py Manuscripts --out pdf_index.csv \
+python pdf_to_jats.py Manuscripts --out pdf_metadata.csv \
   --grobid-url http://localhost:8070 \
   --prefer-fulltext --ocr \
-  --resolve-ncbi --email your.email@example.com \
+  --resolve-ncbi --email your.moniker@lanl.gov \
   --save-tei --tei-out tei_cache \
   --save-jats --jats-out jats_cache \
   --create-tarball --tarball-name jats_archive.tar.gz \
-  --verbose
+  --normalize-unicode --verbose
 ```
 
 ### Process Specific PDFs
