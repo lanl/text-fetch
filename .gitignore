@@ -14,3 +14,7 @@ venv/
 
 # PDFs
 Manuscripts/*.pdf
+
+# XML files
+jats_cache/*.xml 
+tei_cache/*.xml 
