@@ -18,3 +18,7 @@ Manuscripts/*.pdf
 # XML files
 jats_cache/*.xml 
 tei_cache/*.xml 
+
+# Project-specific
+input/
+pubmed_access.py
