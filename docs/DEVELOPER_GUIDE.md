@@ -47,24 +47,50 @@ curl http://localhost:8070/api/isalive
 
 ```
 text-fetch/
-├── pdf_to_jats.py       # Main CLI script
-├── tei2jats.xsl         # TEI→JATS XSLT stylesheet
-├── pyproject.toml       # Project metadata and dependencies
-├── requirements.txt     # Pip-compatible dependencies
-├── .pre-commit-config.yaml  # Pre-commit hook configuration
-├── CHANGELOG.md         # Version history
-├── README.md            # User documentation
+├── cli.py                    # Entry point (thin dispatcher)
+├── src/
+│   └── text_fetch/
+│       ├── __init__.py       # Package init with version
+│       ├── pdf.py            # PDF processing via GROBID
+│       ├── pmc.py            # PubMed Central fetching
+│       ├── ncbi.py           # NCBI E-utilities wrapper
+│       ├── query.py          # JSON config → query builder
+│       └── common.py         # Shared utilities
+├── tei2jats.xsl              # TEI→JATS XSLT stylesheet
+├── pyproject.toml            # Project metadata and dependencies
+├── requirements.txt          # Pip-compatible dependencies
+├── .pre-commit-config.yaml   # Pre-commit hook configuration
+├── CHANGELOG.md              # Version history
+├── README.md                 # User documentation
 ├── docs/
-│   ├── ROADMAP.md       # Development roadmap
-│   ├── ARCHITECTURE.md  # System design
-│   └── DEVELOPER_GUIDE.md  # This file
-├── tests/               # Test suite
-│   ├── conftest.py      # Pytest fixtures
-│   └── test_*.py        # Test modules
-├── input/               # Search configs (gitignored)
-├── tei_cache/           # TEI cache (gitignored)
-└── jats_cache/          # JATS cache (gitignored)
+│   ├── ROADMAP.md            # Development roadmap
+│   ├── ARCHITECTURE.md       # System design
+│   ├── DEVELOPER_GUIDE.md    # This file
+│   └── v0.1.1-plan.md        # Implementation plan
+├── tests/                    # Test suite
+│   ├── conftest.py           # Pytest fixtures
+│   └── test_*.py             # Test modules
+├── input/                    # Search configs (gitignored)
+├── tei_cache/                # TEI cache (gitignored)
+└── jats_cache/               # JATS cache (gitignored)
 ```
+
+### CLI Architecture Directive
+
+> **`cli.py` must remain a thin dispatcher.** It handles:
+> - Argument parsing via click decorators
+> - Subcommand routing to appropriate modules
+> - Error handling and exit codes
+> - User-facing output (progress bars, messages)
+>
+> **Business logic lives in modules** (`pmc.py`, `pdf.py`, `query.py`, etc.).
+>
+> **Rule of thumb:** If a function in `cli.py` exceeds 20 lines, it belongs in a module.
+
+This separation ensures:
+1. Testability: Module functions can be tested without CLI overhead
+2. Reusability: Modules can be imported by other tools
+3. Maintainability: Clear separation of concerns
 
 ## Code Style
 
