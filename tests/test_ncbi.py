@@ -515,3 +515,292 @@ class TestNCBIClientGetPmcids:
         # Should only include IDs with PMCIDs
         assert result == {"111": "PMC111", "333": "PMC333"}
         assert "222" not in result
+
+
+class TestNCBIClientFetchPmcXml:
+    """Tests for fetch_pmc_xml method."""
+
+    # Sample JATS/NXML content for testing
+    SAMPLE_JATS_XML = """<?xml version="1.0" ?>
+<!DOCTYPE pmc-articleset PUBLIC "-//NLM//DTD ARTICLE SET 2.0//EN"
+    "https://dtd.nlm.nih.gov/ncbi/pmc/articleset/nlm-articleset-2.0.dtd">
+<pmc-articleset>
+<article article-type="research-article">
+<front>
+<article-meta>
+<article-id pub-id-type="pmcid">7012345</article-id>
+<title-group><article-title>Test Article</article-title></title-group>
+</article-meta>
+</front>
+<body><p>Article body content here.</p></body>
+</article>
+</pmc-articleset>"""
+
+    def test_fetch_pmc_xml_success(self, requests_mock: rm.Mocker):
+        """Successful fetch returns XML content."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.SAMPLE_JATS_XML,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC7012345")
+
+        assert result is not None
+        assert "<pmc-articleset>" in result
+        assert "<article" in result
+        assert "Test Article" in result
+
+    def test_fetch_pmc_xml_normalizes_pmcid_with_prefix(self, requests_mock: rm.Mocker):
+        """PMCID with PMC prefix is normalized correctly."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.SAMPLE_JATS_XML,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            client.fetch_pmc_xml("PMC7012345")
+
+        # Should strip PMC prefix for API call
+        history = requests_mock.request_history[0]
+        assert "id=7012345" in history.url
+        assert "db=pmc" in history.url
+        assert "retmode=xml" in history.url
+
+    def test_fetch_pmc_xml_normalizes_pmcid_without_prefix(
+        self, requests_mock: rm.Mocker
+    ):
+        """PMCID without PMC prefix works correctly."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.SAMPLE_JATS_XML,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("7012345")
+
+        assert result is not None
+        # Should use ID as-is
+        history = requests_mock.request_history[0]
+        assert "id=7012345" in history.url
+
+    def test_fetch_pmc_xml_empty_response(self, requests_mock: rm.Mocker):
+        """Empty response returns None."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="",
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC7012345")
+
+        assert result is None
+
+    def test_fetch_pmc_xml_minimal_response(self, requests_mock: rm.Mocker):
+        """Very short response returns None."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<?xml?>",
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC7012345")
+
+        assert result is None
+
+    def test_fetch_pmc_xml_error_response(self, requests_mock: rm.Mocker):
+        """Error in XML response returns None."""
+        error_xml = """<?xml version="1.0"?>
+        <error>ID not found: 9999999</error>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=error_xml,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC9999999")
+
+        assert result is None
+
+    def test_fetch_pmc_xml_id_not_found(self, requests_mock: rm.Mocker):
+        """ID not found in response returns None."""
+        error_xml = """<?xml version="1.0"?>
+        <result><status>ID not found</status></result>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=error_xml,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC9999999")
+
+        assert result is None
+
+    def test_fetch_pmc_xml_non_jats_response(self, requests_mock: rm.Mocker):
+        """Non-JATS XML response returns None."""
+        non_jats_xml = """<?xml version="1.0"?>
+        <some-other-format>
+            <data>This is not JATS/NXML format</data>
+        </some-other-format>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=non_jats_xml,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC7012345")
+
+        assert result is None
+
+    def test_fetch_pmc_xml_article_only(self, requests_mock: rm.Mocker):
+        """Response with just <article> tag is valid."""
+        article_xml = """<?xml version="1.0"?>
+        <article article-type="research-article">
+            <front><article-meta>
+                <article-id>123</article-id>
+            </article-meta></front>
+            <body><p>Content</p></body>
+        </article>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=article_xml,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.fetch_pmc_xml("PMC7012345")
+
+        assert result is not None
+        assert "<article" in result
+
+    def test_fetch_pmc_xml_http_404_raises(self, requests_mock: rm.Mocker):
+        """HTTP 404 error raises NCBIRequestError."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            status_code=404,
+        )
+
+        with (
+            NCBIClient(email="test@example.com") as client,
+            pytest.raises(NCBIRequestError, match="HTTP error"),
+        ):
+            client.fetch_pmc_xml("PMC9999999")
+
+    def test_fetch_pmc_xml_http_400_raises(self, requests_mock: rm.Mocker):
+        """HTTP 400 error raises NCBIRequestError."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            status_code=400,
+        )
+
+        with (
+            NCBIClient(email="test@example.com") as client,
+            pytest.raises(NCBIRequestError, match="HTTP error"),
+        ):
+            client.fetch_pmc_xml("invalid")
+
+    def test_fetch_pmc_xml_http_500_raises(self, requests_mock: rm.Mocker):
+        """HTTP 500 error raises after retries."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            status_code=500,
+        )
+
+        with (
+            NCBIClient(
+                email="test@example.com",
+                max_retries=1,
+                retry_delay=0.01,
+            ) as client,
+            pytest.raises(NCBIRequestError, match="Server error"),
+        ):
+            client.fetch_pmc_xml("PMC7012345")
+
+
+class TestNCBIClientFetchPmcXmlBatch:
+    """Tests for fetch_pmc_xml_batch method."""
+
+    # Sample XML needs to be >100 chars to pass validation
+    SAMPLE_XML = """<?xml version="1.0"?>
+<pmc-articleset>
+<article article-type="research-article">
+<front><article-meta><article-id>123</article-id></article-meta></front>
+<body><p>Test content for batch fetch testing.</p></body>
+</article>
+</pmc-articleset>"""
+
+    def test_fetch_batch_all_success(self, requests_mock: rm.Mocker):
+        """Batch fetch returns all results."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.SAMPLE_XML,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            results = client.fetch_pmc_xml_batch(["PMC111", "PMC222", "PMC333"])
+
+        assert len(results) == 3
+        assert all(v is not None for v in results.values())
+        assert "PMC111" in results
+        assert "PMC222" in results
+        assert "PMC333" in results
+
+    def test_fetch_batch_normalizes_pmcids(self, requests_mock: rm.Mocker):
+        """Batch fetch normalizes PMCIDs in result keys."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.SAMPLE_XML,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            # Mix of with and without prefix
+            results = client.fetch_pmc_xml_batch(["PMC111", "222", "PMC333"])
+
+        # All keys should have PMC prefix
+        assert "PMC111" in results
+        assert "PMC222" in results
+        assert "PMC333" in results
+
+    def test_fetch_batch_partial_failure(self, requests_mock: rm.Mocker):
+        """Batch fetch handles partial failures gracefully."""
+        # Second response is long enough but contains error marker
+        error_xml = """<?xml version="1.0"?>
+<result><status>ID not found</status>
+<message>The requested article could not be found in PMC.</message>
+</result>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            [
+                {"text": self.SAMPLE_XML},  # First succeeds
+                {"text": error_xml},  # Second fails (ID not found)
+                {"text": self.SAMPLE_XML},  # Third succeeds
+            ],
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            results = client.fetch_pmc_xml_batch(["PMC111", "PMC222", "PMC333"])
+
+        assert len(results) == 3
+        assert results["PMC111"] is not None
+        assert results["PMC222"] is None  # Failed
+        assert results["PMC333"] is not None
+
+    def test_fetch_batch_empty_input(self):
+        """Batch fetch with empty list returns empty dict."""
+        with NCBIClient(email="test@example.com") as client:
+            results = client.fetch_pmc_xml_batch([])
+
+        assert results == {}
+
+    def test_fetch_batch_single_item(self, requests_mock: rm.Mocker):
+        """Batch fetch works with single item."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.SAMPLE_XML,
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            results = client.fetch_pmc_xml_batch(["PMC111"])
+
+        assert len(results) == 1
+        assert "PMC111" in results
+        assert results["PMC111"] is not None

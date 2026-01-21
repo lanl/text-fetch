@@ -454,3 +454,116 @@ class NCBIClient:
         """
         mapping = self.convert_ids(pmids, id_type="pmid")
         return {pmid: pmcid for pmid, pmcid in mapping.items() if pmcid is not None}
+
+    def fetch_pmc_xml(self, pmcid: str) -> str | None:
+        """Fetch full-text JATS/NXML from PubMed Central.
+
+        Retrieves the full-text XML (JATS format) for a PMC article using
+        the E-utilities efetch endpoint.
+
+        Args:
+            pmcid: PMC ID (with or without "PMC" prefix,
+                   e.g., "PMC12345" or "12345").
+
+        Returns:
+            Full-text XML string (JATS/NXML format) if available,
+            None otherwise.
+
+        Raises:
+            NCBIRequestError: If the request fails after all retries.
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> xml_content = client.fetch_pmc_xml("PMC7012345")
+            >>> if xml_content:
+            ...     print(f"Retrieved {len(xml_content)} bytes of XML")
+        """
+        # Normalize PMCID: remove "PMC" prefix if present for the API call
+        is_prefixed = pmcid.upper().startswith("PMC")
+        pmcid_num = pmcid.lstrip("PMC") if is_prefixed else pmcid
+
+        params: dict[str, Any] = {
+            "db": "pmc",
+            "id": pmcid_num,
+            "retmode": "xml",
+        }
+
+        try:
+            xml_content = self._request_xml("efetch.fcgi", params)
+
+            # Check if we got valid content
+            # PMC returns an error document if the article is not available
+            if not xml_content or len(xml_content) < 100:
+                logger.warning("Empty or minimal response for PMC%s", pmcid_num)
+                return None
+
+            # Check for error responses in the XML
+            lower_content = xml_content.lower()
+            has_error = "<error>" in lower_content
+            not_found = "id not found" in lower_content
+            if has_error or not_found:
+                logger.warning("PMC article not found: PMC%s", pmcid_num)
+                return None
+
+            # Check for valid PMC article structure
+            # JATS/NXML should contain <article> or <pmc-articleset>
+            has_article = "<article" in xml_content
+            has_articleset = "<pmc-articleset" in xml_content
+            if not has_article and not has_articleset:
+                logger.warning(
+                    "Response does not appear to be JATS/NXML for PMC%s",
+                    pmcid_num,
+                )
+                return None
+
+            logger.debug(
+                "Retrieved JATS/NXML for PMC%s (%d bytes)",
+                pmcid_num,
+                len(xml_content),
+            )
+            return xml_content
+
+        except NCBIRequestError as e:
+            # 400-level errors may indicate the article is not available
+            if e.status_code and 400 <= e.status_code < 500:
+                logger.warning("PMC article not available: PMC%s (%s)", pmcid_num, e)
+                return None
+            raise
+
+    def fetch_pmc_xml_batch(
+        self,
+        pmcids: list[str],
+    ) -> dict[str, str | None]:
+        """Fetch full-text JATS/NXML for multiple PMC articles.
+
+        Retrieves full-text XML for each PMCID, handling failures gracefully.
+
+        Args:
+            pmcids: List of PMC IDs (with or without "PMC" prefix).
+
+        Returns:
+            Dictionary mapping PMCIDs to XML content
+            (or None if unavailable).
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> results = client.fetch_pmc_xml_batch(
+            ...     ["PMC7012345", "PMC7012346"]
+            ... )
+            >>> successful = sum(1 for v in results.values() if v)
+            >>> print(f"Retrieved {successful} of {len(results)} articles")
+        """
+        results: dict[str, str | None] = {}
+
+        for pmcid in pmcids:
+            # Normalize to include PMC prefix for consistent keys
+            pmcid_norm = pmcid if pmcid.upper().startswith("PMC") else f"PMC{pmcid}"
+
+            try:
+                xml_content = self.fetch_pmc_xml(pmcid)
+                results[pmcid_norm] = xml_content
+            except NCBIRequestError as e:
+                logger.error("Failed to fetch %s: %s", pmcid_norm, e)
+                results[pmcid_norm] = None
+
+        return results
