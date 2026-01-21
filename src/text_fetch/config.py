@@ -12,6 +12,17 @@ Config file locations (searched in order):
 
 from __future__ import annotations
 
+__all__ = [
+    "Config",
+    "GrobidConfig",
+    "NCBIConfig",
+    "get_grobid_url",
+    "get_ncbi_api_key",
+    "get_ncbi_email",
+    "get_setting",
+    "load_config",
+]
+
 import logging
 import os
 from dataclasses import dataclass, field

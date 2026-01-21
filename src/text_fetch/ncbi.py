@@ -6,6 +6,13 @@ including ESearch, ID conversion, and PMC OA retrieval.
 
 from __future__ import annotations
 
+__all__ = [
+    "NCBIClient",
+    "NCBIError",
+    "NCBIRateLimitError",
+    "NCBIRequestError",
+]
+
 import logging
 import time
 from typing import Any

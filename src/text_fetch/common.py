@@ -1,11 +1,21 @@
 """Shared utilities for text-fetch."""
 
+from __future__ import annotations
+
+__all__ = [
+    "RateLimiter",
+    "clean",
+    "create_tarball",
+    "extract_doi_from_text",
+    "sha1_of_bytes",
+    "sha1_of_file",
+]
+
 import hashlib
 import re
 import tarfile
 import time
 import unicodedata
-from typing import Optional
 
 from unidecode import unidecode
 
@@ -93,7 +103,7 @@ class RateLimiter:
         self.last = time.time()
 
 
-def extract_doi_from_text(text: str) -> Optional[str]:
+def extract_doi_from_text(text: str) -> str | None:
     """Extract DOI from text using regex.
 
     Args:
