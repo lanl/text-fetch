@@ -50,7 +50,14 @@ def pdf(
     click.echo(f"PDF processing not yet implemented. Root: {pdf_root}")
 
 
-@cli.command()
+@cli.group()
+@click.pass_context
+def pmc(ctx: click.Context) -> None:
+    """PubMed Central commands."""
+    pass
+
+
+@pmc.command(name="fetch")
 @click.option("--config-file", type=click.Path(exists=True), help="JSON search config")
 @click.option("--query", help="Raw PubMed query string")
 @click.option("--out", required=True, help="Output directory")
@@ -68,7 +75,7 @@ def pdf(
 )
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
-def pmc(
+def pmc_fetch(
     ctx: click.Context,
     config_file: str | None,
     query: str | None,
@@ -77,7 +84,7 @@ def pmc(
     api_key: str | None,
     verbose: bool,
 ) -> None:
-    """Fetch articles from PubMed Central."""
+    """Fetch articles from PubMed Central via E-utilities."""
     if not config_file and not query:
         raise click.UsageError("Either --config-file or --query is required")
 
@@ -103,6 +110,152 @@ def pmc(
     click.echo("PMC fetching not yet implemented.")
 
 
+@pmc.command(name="sync")
+@click.option(
+    "--storage",
+    required=True,
+    type=click.Path(),
+    help="Storage directory for PMC OA corpus",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only download new/updated files (incremental update)",
+)
+@click.option(
+    "--subset",
+    multiple=True,
+    type=click.Choice(["oa_comm", "oa_noncomm", "oa_other"]),
+    help="Subset(s) to sync (default: all)",
+)
+@click.option(
+    "--max-files",
+    type=int,
+    default=None,
+    help="Maximum files to download (for testing)",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Skip confirmation prompts",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def pmc_sync(
+    ctx: click.Context,
+    storage: str,
+    update: bool,
+    subset: tuple[str, ...],
+    max_files: int | None,
+    yes: bool,
+    verbose: bool,
+) -> None:
+    """Sync PMC Open Access corpus to local storage.
+
+    Downloads tar.gz files from the PMC Open Access subset.
+    Use --update for incremental updates after initial sync.
+
+    \b
+    Examples:
+        # Initial sync (downloads entire corpus ~400GB)
+        text-fetch pmc sync --storage /Volumes/External/pmc-oa
+
+        # Incremental update
+        text-fetch pmc sync --storage /Volumes/External/pmc-oa --update
+
+        # Sync only commercial-use subset
+        text-fetch pmc sync --storage ./pmc-oa --subset oa_comm
+    """
+    import logging
+
+    from .pmc_oa import PMCOAClient, read_sync_manifest
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    # Determine subsets
+    subsets = list(subset) if subset else ["oa_comm", "oa_noncomm", "oa_other"]
+
+    click.echo(f"Storage directory: {storage}")
+    click.echo(f"Subsets: {', '.join(subsets)}")
+    click.echo(f"Mode: {'incremental update' if update else 'full sync'}")
+
+    # Check existing manifest
+    manifest = read_sync_manifest(storage)
+    if manifest.entries:
+        click.echo(f"Existing manifest: {len(manifest.entries)} files")
+        if manifest.last_sync:
+            click.echo(f"Last sync: {manifest.last_sync}")
+
+    with PMCOAClient(storage, subsets=subsets) as client:
+        # Fetch file lists to show stats
+        click.echo("\nFetching file lists...")
+        all_entries = client.get_all_entries()
+
+        if not all_entries:
+            click.echo("Error: Could not fetch file lists from PMC")
+            ctx.exit(1)
+
+        # Calculate what needs to be downloaded
+        if update and manifest.entries:
+            to_download = client.get_updates(manifest, all_entries)
+        else:
+            to_download = all_entries
+
+        if max_files:
+            to_download = to_download[:max_files]
+
+        # Calculate estimated size (rough estimate: ~5MB average per file)
+        estimated_size_mb = len(to_download) * 5
+
+        click.echo(f"\nRemote files: {len(all_entries):,}")
+        click.echo(f"Files to download: {len(to_download):,}")
+        click.echo(f"Estimated size: ~{estimated_size_mb:,} MB")
+
+        if not to_download:
+            click.echo("\nNothing to download. Already up to date.")
+            return
+
+        # Confirmation prompt
+        if not yes:
+            if len(to_download) > 1000:
+                click.echo(
+                    f"\nWarning: This will download {len(to_download):,} files "
+                    f"(~{estimated_size_mb / 1024:.1f} GB)."
+                )
+            if not click.confirm("\nProceed with download?"):
+                click.echo("Aborted.")
+                ctx.exit(0)
+
+        # Progress bar
+        with click.progressbar(
+            length=len(to_download),
+            label="Downloading",
+            show_pos=True,
+            show_percent=True,
+        ) as bar:
+
+            def progress_callback(accession_id: str, current: int, total: int) -> None:
+                bar.update(1)
+
+            stats = client.sync(
+                update_only=update,
+                progress_callback=progress_callback,
+                max_files=max_files,
+            )
+
+        # Summary
+        click.echo("\n" + "=" * 50)
+        click.echo("Sync complete!")
+        click.echo(f"  Downloaded: {stats['downloaded']:,}")
+        click.echo(f"  Failed: {stats['failed']:,}")
+        click.echo(f"  Total bytes: {stats['bytes_downloaded']:,}")
+        click.echo(f"  Manifest: {storage}/sync_manifest.json")
+
+
 @cli.command(name="config")
 @click.option("--show", is_flag=True, help="Show resolved configuration")
 @click.pass_context
@@ -112,13 +265,13 @@ def config_cmd(ctx: click.Context, show: bool) -> None:
 
     if True:  # Default behavior is to show
         click.echo("Configuration:")
-        click.echo(f"  Config file: {config.config_path or 'Not found'}")
+        path = config.config_path or "Not found"
+        click.echo(f"  Config file: {path}")
         click.echo("")
         click.echo("  [ncbi]")
         click.echo(f"    email: {config.ncbi.email or '(not set)'}")
-        click.echo(
-            f"    api_key: {'[configured]' if config.ncbi.api_key else '(not set)'}"
-        )
+        api_status = "[configured]" if config.ncbi.api_key else "(not set)"
+        click.echo(f"    api_key: {api_status}")
         click.echo("")
         click.echo("  [grobid]")
         click.echo(f"    url: {config.grobid.url}")
