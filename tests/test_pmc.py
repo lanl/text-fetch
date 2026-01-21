@@ -1,10 +1,12 @@
-"""Unit tests for PMC JATS validation and article saving."""
+"""Unit tests for PMC JATS validation, article saving, and fetch_pmc()."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import pytest
 from text_fetch.pmc import (
     BODY_MIN_CHARS,
     JATSValidator,
@@ -12,10 +14,12 @@ from text_fetch.pmc import (
     ValidationResult,
     ValidationStatus,
     compute_sha256,
+    fetch_pmc,
     read_manifest,
     save_pmc_article,
     write_manifest,
 )
+from text_fetch.query import SearchConfig
 
 
 class TestValidationStatus:
@@ -656,3 +660,274 @@ consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
         assert path is not None
         # Still incomplete due to missing abstract
         assert result.has_abstract is False
+
+
+class TestFetchPmc:
+    """Integration tests for fetch_pmc() function."""
+
+    # Complete JATS for mocked responses (body must be >1000 chars)
+    VALID_JATS = """<?xml version="1.0"?>
+<article>
+<front><article-meta>
+<article-id pub-id-type="pmcid">PMC12345</article-id>
+<title-group><article-title>Test Article</article-title></title-group>
+<abstract><p>Test abstract content.</p></abstract>
+</article-meta></front>
+<body>
+<p>This is body content that needs to be long enough to pass validation.
+We need at least 1000 characters of body content for the default threshold.
+Adding more text to ensure we reach that minimum requirement here.
+Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim
+veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+commodo consequat. Duis aute irure dolor in reprehenderit in voluptate
+velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint
+occaecat cupidatat non proident sunt in culpa qui officia deserunt
+mollit anim id est laborum. More content to reach the threshold.
+Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium
+doloremque laudantium totam rem aperiam eaque ipsa quae ab illo inventore
+veritatis et quasi architecto beatae vitae dicta sunt explicabo. Nemo enim
+ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit sed quia
+consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
+</body>
+</article>"""
+
+    INCOMPLETE_JATS = """<?xml version="1.0"?>
+<article>
+<front><article-meta>
+<article-id pub-id-type="pmcid">PMC67890</article-id>
+<title-group><article-title>Incomplete Article</article-title></title-group>
+</article-meta></front>
+<body><p>Short body.</p></body>
+</article>"""
+
+    def test_fetch_pmc_requires_email(self, tmp_path: Path):
+        """fetch_pmc raises ValueError if email not provided."""
+        with pytest.raises(ValueError, match="Email is required"):
+            fetch_pmc(query="test", email="", output_dir=tmp_path)
+
+    def test_fetch_pmc_requires_config_or_query(self, tmp_path: Path):
+        """fetch_pmc raises ValueError if neither config nor query."""
+        with pytest.raises(ValueError, match="Either config or query"):
+            fetch_pmc(email="test@example.com", output_dir=tmp_path)
+
+    def test_fetch_pmc_with_query(self, tmp_path: Path):
+        """fetch_pmc works with raw query string."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345", "67890"]
+        mock_client.get_pmcids.return_value = {"12345": "PMC12345"}
+        mock_client.fetch_pmc_xml.return_value = self.VALID_JATS
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                query="hlavacek ws[au]",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["pmids_found"] == 2
+        assert stats["pmcids_available"] == 1
+        assert stats["fetched"] == 1
+        assert stats["valid"] == 1
+        assert stats["errors"] == 0
+
+        # Check file was saved
+        assert (tmp_path / "valid" / "PMC12345.xml").exists()
+        # Check manifest was written
+        assert (tmp_path / "manifest.json").exists()
+
+    def test_fetch_pmc_with_search_config(self, tmp_path: Path):
+        """fetch_pmc works with SearchConfig."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345"]
+        mock_client.get_pmcids.return_value = {"12345": "PMC12345"}
+        mock_client.fetch_pmc_xml.return_value = self.VALID_JATS
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        config = SearchConfig(author="hlavacek ws")
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                config=config,
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["pmids_found"] == 1
+        assert stats["query"] == "hlavacek ws[au]"
+        # Verify the client was called with correct query
+        mock_client.esearch_ids.assert_called_once_with("hlavacek ws[au]")
+
+    def test_fetch_pmc_handles_no_results(self, tmp_path: Path):
+        """fetch_pmc handles empty search results gracefully."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = []
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                query="nonexistent search query xyz123",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["pmids_found"] == 0
+        assert stats["pmcids_available"] == 0
+        assert stats["fetched"] == 0
+
+    def test_fetch_pmc_handles_no_pmcids(self, tmp_path: Path):
+        """fetch_pmc handles case where no PMCIDs available."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345", "67890"]
+        mock_client.get_pmcids.return_value = {}  # No PMC full-text
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                query="test query",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["pmids_found"] == 2
+        assert stats["pmcids_available"] == 0
+        assert stats["fetched"] == 0
+
+    def test_fetch_pmc_handles_fetch_errors(self, tmp_path: Path):
+        """fetch_pmc counts errors when fetch fails."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345"]
+        mock_client.get_pmcids.return_value = {"12345": "PMC12345"}
+        mock_client.fetch_pmc_xml.return_value = None  # Fetch failed
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                query="test query",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["pmcids_available"] == 1
+        assert stats["fetched"] == 0
+        assert stats["errors"] == 1
+
+    def test_fetch_pmc_sorts_valid_incomplete(self, tmp_path: Path):
+        """fetch_pmc sorts articles into valid/incomplete folders."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345", "67890"]
+        mock_client.get_pmcids.return_value = {
+            "12345": "PMC12345",
+            "67890": "PMC67890",
+        }
+        # Return different XML for each PMCID
+        mock_client.fetch_pmc_xml.side_effect = [
+            self.VALID_JATS,
+            self.INCOMPLETE_JATS,
+        ]
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                query="test query",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["fetched"] == 2
+        assert stats["valid"] == 1
+        assert stats["incomplete"] == 1
+
+        assert (tmp_path / "valid" / "PMC12345.xml").exists()
+        assert (tmp_path / "incomplete" / "PMC67890.xml").exists()
+
+    def test_fetch_pmc_skips_duplicates(self, tmp_path: Path):
+        """fetch_pmc skips articles already in manifest."""
+        # Pre-populate manifest
+        existing_entry = ManifestEntry(
+            pmcid="PMC12345",
+            filename="valid/PMC12345.xml",
+            status="valid",
+            has_title=True,
+            has_abstract=True,
+            has_body=True,
+            body_chars=1500,
+            saved_at="2025-01-21T12:00:00Z",
+            sha256=compute_sha256(self.VALID_JATS),
+        )
+        write_manifest(tmp_path, {"PMC12345": existing_entry})
+        # Also create the file
+        (tmp_path / "valid").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "valid" / "PMC12345.xml").write_text(self.VALID_JATS)
+
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345"]
+        mock_client.get_pmcids.return_value = {"12345": "PMC12345"}
+        mock_client.fetch_pmc_xml.return_value = self.VALID_JATS
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            stats = fetch_pmc(
+                query="test query",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        assert stats["fetched"] == 0
+        assert stats["skipped"] == 1
+
+    def test_fetch_pmc_progress_callback(self, tmp_path: Path):
+        """fetch_pmc calls progress_callback during fetch."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345", "67890"]
+        mock_client.get_pmcids.return_value = {
+            "12345": "PMC12345",
+            "67890": "PMC67890",
+        }
+        mock_client.fetch_pmc_xml.return_value = self.VALID_JATS
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        progress_calls = []
+
+        def track_progress(pmcid: str, current: int, total: int) -> None:
+            progress_calls.append((pmcid, current, total))
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            fetch_pmc(
+                query="test query",
+                email="test@example.com",
+                output_dir=tmp_path,
+                progress_callback=track_progress,
+            )
+
+        assert len(progress_calls) == 2
+        assert progress_calls[0][2] == 2  # total
+        assert progress_calls[1][2] == 2
+
+    def test_fetch_pmc_manifest_has_metadata(self, tmp_path: Path):
+        """fetch_pmc writes query to manifest metadata."""
+        mock_client = MagicMock()
+        mock_client.esearch_ids.return_value = ["12345"]
+        mock_client.get_pmcids.return_value = {"12345": "PMC12345"}
+        mock_client.fetch_pmc_xml.return_value = self.VALID_JATS
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+
+        with patch("text_fetch.ncbi.NCBIClient", return_value=mock_client):
+            fetch_pmc(
+                query="hlavacek ws[au]",
+                email="test@example.com",
+                output_dir=tmp_path,
+            )
+
+        manifest_data = json.loads((tmp_path / "manifest.json").read_text())
+        assert manifest_data["metadata"]["query"] == "hlavacek ws[au]"
