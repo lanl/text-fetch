@@ -332,6 +332,131 @@ def pmc_sync(
         click.echo(f"  Manifest: {storage}/sync_manifest.json")
 
 
+@cli.group()
+@click.pass_context
+def arxiv(ctx: click.Context) -> None:
+    """arXiv preprint commands."""
+    pass
+
+
+@arxiv.command(name="fetch")
+@click.option(
+    "--config-file",
+    type=click.Path(exists=True),
+    help="JSON search config",
+)
+@click.option("--query", help="Raw arXiv query string")
+@click.option(
+    "--categories",
+    multiple=True,
+    help="arXiv categories (e.g., q-bio.MN, cs.AI)",
+)
+@click.option("--max-results", default=100, help="Maximum results")
+@click.option("--out", required=True, help="Output directory")
+@click.option("--grobid-url", help="GROBID service URL")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def arxiv_fetch(
+    ctx: click.Context,
+    config_file: str | None,
+    query: str | None,
+    categories: tuple[str, ...],
+    max_results: int,
+    out: str,
+    grobid_url: str | None,
+    verbose: bool,
+) -> None:
+    """Fetch preprints from arXiv.
+
+    Downloads PDFs and converts to JATS via GROBID.
+
+    \b
+    Examples:
+        # Search by author
+        text-fetch arxiv fetch --query 'au:"hlavacek ws"' --out ./output
+
+        # Search by category
+        text-fetch arxiv fetch --categories q-bio.MN --out ./output
+
+        # Using JSON config
+        text-fetch arxiv fetch --config-file input/search.json --out ./output
+    """
+    import logging
+
+    from .arxiv import fetch_arxiv
+    from .query import SearchConfig, SearchConfigError
+
+    if not config_file and not query and not categories:
+        raise click.UsageError(
+            "Either --config-file, --query, or --categories required"
+        )
+
+    config = ctx.obj["config"]
+
+    # Resolve GROBID URL
+    resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+        click.echo(f"GROBID URL: {resolved_grobid}")
+
+    # Build search config
+    search_config = None
+    if config_file:
+        try:
+            search_config = SearchConfig.from_json(config_file)
+        except SearchConfigError as e:
+            raise click.UsageError(f"Invalid config: {e}") from e
+    elif categories:
+        search_config = SearchConfig(arxiv_categories=list(categories))
+
+    # Show query
+    arxiv_query: str | None = search_config.to_arxiv_query() if search_config else query
+    click.echo(f"Query: {arxiv_query}")
+
+    # Progress bar
+    progress_bar = None
+
+    def progress_callback(arxiv_id: str, current: int, total: int) -> None:
+        nonlocal progress_bar
+        if progress_bar is None:
+            progress_bar = click.progressbar(
+                length=total,
+                label="Fetching articles",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        progress_bar.update(1)
+
+    try:
+        stats = fetch_arxiv(
+            config=search_config,
+            query=query,
+            output_dir=out,
+            grobid_url=resolved_grobid,
+            max_results=max_results,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("Fetch complete!")
+    click.echo(f"  Articles found: {stats['articles_found']:,}")
+    click.echo(f"  PDFs downloaded: {stats['pdfs_downloaded']:,}")
+    click.echo(f"  Converted: {stats['converted']:,}")
+    click.echo(f"    Valid: {stats['valid']:,}")
+    click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo(f"\nOutput: {out}/")
+
+
 @cli.command(name="config")
 @click.option("--show", is_flag=True, help="Show resolved configuration")
 @click.pass_context
