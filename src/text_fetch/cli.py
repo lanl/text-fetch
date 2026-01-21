@@ -84,7 +84,21 @@ def pmc_fetch(
     api_key: str | None,
     verbose: bool,
 ) -> None:
-    """Fetch articles from PubMed Central via E-utilities."""
+    """Fetch articles from PubMed Central via E-utilities.
+
+    \b
+    Examples:
+        # Fetch by author
+        text-fetch pmc fetch --query "hlavacek ws[au]" --out ./output
+
+        # Fetch using JSON config
+        text-fetch pmc fetch --config-file input/ebola.json --out ./output
+    """
+    import logging
+
+    from .pmc import fetch_pmc
+    from .query import SearchConfig, SearchConfigError
+
     if not config_file and not query:
         raise click.UsageError("Either --config-file or --query is required")
 
@@ -98,7 +112,9 @@ def pmc_fetch(
 
     resolved_api_key = get_ncbi_api_key(cli_value=api_key, config=config)
 
+    # Set up logging
     if verbose:
+        logging.basicConfig(level=logging.DEBUG)
         click.echo(f"Using NCBI email: {resolved_email}")
         if resolved_api_key:
             click.echo("Using NCBI API key: [configured]")
@@ -107,7 +123,67 @@ def pmc_fetch(
         if config.config_path:
             click.echo(f"Config loaded from: {config.config_path}")
 
-    click.echo("PMC fetching not yet implemented.")
+    # Load search config if provided
+    search_config = None
+    if config_file:
+        try:
+            search_config = SearchConfig.from_json(config_file)
+            if verbose:
+                click.echo(f"Loaded search config: {search_config}")
+        except SearchConfigError as e:
+            raise click.UsageError(f"Invalid search config: {e}") from e
+
+    # Show query that will be used
+    pubmed_query: str = (
+        search_config.to_pubmed_query() if search_config else (query or "")
+    )
+    click.echo(f"Query: {pubmed_query}")
+
+    # Progress callback for click progress bar
+    progress_bar = None
+    total_articles = 0
+
+    def progress_callback(pmcid: str, current: int, total: int) -> None:
+        nonlocal progress_bar, total_articles
+        if progress_bar is None:
+            total_articles = total
+            progress_bar = click.progressbar(
+                length=total,
+                label="Fetching articles",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        progress_bar.update(1)
+
+    try:
+        # Run the fetch
+        stats = fetch_pmc(
+            config=search_config,
+            query=query,
+            email=resolved_email,
+            api_key=resolved_api_key,
+            output_dir=out,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    # Print summary
+    click.echo("\n" + "=" * 50)
+    click.echo("Fetch complete!")
+    click.echo(f"  PMIDs found: {stats['pmids_found']:,}")
+    click.echo(f"  PMC full-text available: {stats['pmcids_available']:,}")
+    click.echo(f"  Downloaded: {stats['fetched']:,}")
+    click.echo(f"    Valid: {stats['valid']:,}")
+    click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    click.echo(f"  Skipped (duplicates): {stats['skipped']:,}")
+    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo(f"\nOutput: {out}/")
+    click.echo(f"Manifest: {out}/manifest.json")
 
 
 @pmc.command(name="sync")
