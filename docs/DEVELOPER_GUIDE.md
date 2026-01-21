@@ -56,6 +56,14 @@ deactivate                        # When done
 
 GROBID is required for PDF processing and integration tests.
 
+**Quick start (recommended):**
+
+```bash
+./scripts/start_grobid.sh
+```
+
+**Manual startup:**
+
 ```bash
 # Start GROBID (clean startup, runs in background)
 docker rm -f grobid 2>/dev/null || true

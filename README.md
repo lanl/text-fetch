@@ -33,17 +33,14 @@ uv pip install -r requirements.txt
 GROBID is required for PDF processing. Start it with Docker:
 
 ```bash
-# Start GROBID (clean startup, runs in background)
+# Quick start (recommended)
+./scripts/start_grobid.sh
+
+# Or manually:
 docker rm -f grobid 2>/dev/null || true
 docker run -d --name grobid --restart unless-stopped --init --ulimit core=0 \
   -p 8070:8070 -p 8071:8071 \
   grobid/grobid:0.8.2-crf
-
-# Wait for GROBID to be ready (~30 seconds on first startup)
-until curl -sS http://localhost:8070/api/isalive 2>/dev/null; do
-  echo "Waiting for GROBID..."; sleep 2
-done
-echo "GROBID ready"
 ```
 
 To stop GROBID: `docker stop grobid`
