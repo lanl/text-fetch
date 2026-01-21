@@ -332,26 +332,57 @@ chore: update dependencies
 
 ### Version Bumping
 
-1. Update version in `pyproject.toml`:
+When releasing a new version, update the following files:
+
+| File | What to Update |
+|------|----------------|
+| `pyproject.toml` | `version = "X.Y.Z"` in `[project]` section |
+| `src/text_fetch/__init__.py` | `__version__ = "X.Y.Z"` |
+| `CHANGELOG.md` | Add release notes under `## [X.Y.Z] - YYYY-MM-DD` |
+| `docs/ROADMAP.md` | Mark completed features, update timeline |
+
+**Steps:**
+
+1. **Update `pyproject.toml`**:
    ```toml
    [project]
    version = "0.1.1"
    ```
 
-2. Update `CHANGELOG.md`:
-   ```markdown
-   ## [0.1.1] - 2025-02-01
-   
-   ### Added
-   - PubMed Central search and fetch
+2. **Update `src/text_fetch/__init__.py`**:
+   ```python
+   __version__ = "0.1.1"
    ```
 
-3. Commit and tag:
+3. **Update `CHANGELOG.md`**:
+   ```markdown
+   ## [0.1.1] - 2026-01-21
+   
+   ### Added
+   - PubMed Central search and fetch via `text-fetch pmc` command
+   
+   ### Changed
+   - Refactored to package structure
+   ```
+
+4. **Update `docs/ROADMAP.md`** to mark milestone complete
+
+5. **Run pre-commit** to verify:
    ```bash
-   git add pyproject.toml CHANGELOG.md
-   git commit -m "chore: bump version to 0.1.1"
+   uv run pre-commit run --all-files
+   ```
+
+6. **Commit and tag**:
+   ```bash
+   git add pyproject.toml src/text_fetch/__init__.py CHANGELOG.md docs/ROADMAP.md
+   git commit -m "chore: release v0.1.1"
    git tag v0.1.1
    git push && git push --tags
+   ```
+
+7. **Verify** the CLI shows the new version:
+   ```bash
+   uv run text-fetch --version
    ```
 
 ## Adding New Features
