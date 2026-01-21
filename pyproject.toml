@@ -25,9 +25,8 @@ dev = [
     "types-lxml>=2024.4.14",
 ]
 
-# Entry point will be enabled in v0.1.1 when cli.py is created
-# [project.scripts]
-# text-fetch = "text_fetch.cli:cli"
+[project.scripts]
+text-fetch = "text_fetch.cli:cli"
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]
@@ -35,7 +34,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = ["pdf_to_jats"]
-packages = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.ruff]
 line-length = 88
