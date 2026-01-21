@@ -6,7 +6,7 @@ This guide covers development setup, code conventions, and contribution workflow
 
 ### Prerequisites
 
-- Python 3.8+ (3.11+ recommended)
+- Python 3.9+ (3.12+ recommended)
 - [uv](https://github.com/astral-sh/uv) package manager
 - Docker (for GROBID)
 - Git
@@ -21,13 +21,35 @@ cd text-fetch
 # Install uv if not already installed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Create virtual environment and install dependencies
-uv venv
-source .venv/bin/activate  # or `.venv/Scripts/activate` on Windows
-uv pip install -e ".[dev]"
+# Create virtual environment and sync dependencies
+uv venv                   # Creates .venv/
+uv sync --all-extras      # Installs all dependencies into .venv
 
 # Install pre-commit hooks
-pre-commit install
+uv run pre-commit install
+
+# Verify setup
+uv run text-fetch --version
+```
+
+### Running Commands
+
+We use `uv run` to execute commands within the project's virtual environment.
+This automatically uses `.venv/` without requiring manual activation:
+
+```bash
+uv run text-fetch --help          # Run the CLI
+uv run pre-commit run --all-files # Run linting
+uv run pytest                     # Run tests
+uv run mypy src/                  # Type check
+```
+
+Alternatively, you can activate the venv traditionally:
+
+```bash
+source .venv/bin/activate         # Activate venv
+text-fetch --help                 # Commands work directly
+deactivate                        # When done
 ```
 
 ### Running GROBID
@@ -47,10 +69,10 @@ curl http://localhost:8070/api/isalive
 
 ```
 text-fetch/
-├── cli.py                    # Entry point (thin dispatcher)
 ├── src/
 │   └── text_fetch/
 │       ├── __init__.py       # Package init with version
+│       ├── cli.py            # Entry point (thin dispatcher)
 │       ├── pdf.py            # PDF processing via GROBID
 │       ├── pmc.py            # PubMed Central fetching
 │       ├── ncbi.py           # NCBI E-utilities wrapper
@@ -77,7 +99,7 @@ text-fetch/
 
 ### CLI Architecture Directive
 
-> **`cli.py` must remain a thin dispatcher.** It handles:
+> **`src/text_fetch/cli.py` must remain a thin dispatcher.** It handles:
 > - Argument parsing via click decorators
 > - Subcommand routing to appropriate modules
 > - Error handling and exit codes

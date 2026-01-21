@@ -41,7 +41,7 @@ import sys
 import tarfile
 import time
 import unicodedata
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 import requests
 from lxml import etree as ET
@@ -136,7 +136,7 @@ def tei_text(elem, xpath: str, normalize_unicode: bool = False) -> str:
     return clean(txt, normalize_unicode)
 
 
-def _first_match(elem, xpaths: List[str], normalize_unicode: bool = False) -> str:
+def _first_match(elem, xpaths: list[str], normalize_unicode: bool = False) -> str:
     for xp in xpaths:
         v = tei_text(elem, xp, normalize_unicode)
         if v:
@@ -144,7 +144,7 @@ def _first_match(elem, xpaths: List[str], normalize_unicode: bool = False) -> st
     return ""
 
 
-def parse_tei_fields(tei_xml: str, normalize_unicode: bool = False) -> Dict[str, str]:
+def parse_tei_fields(tei_xml: str, normalize_unicode: bool = False) -> dict[str, str]:
     """
     Parse a GROBID TEI string and return a dict with:
       first_author, year, title, journal, DOI, PMID, PMCID
@@ -285,7 +285,7 @@ class RateLimiter:
 
 def grobid_process(
     pdf_path: str, url: str, prefer_fulltext: bool, ocr: bool, timeout: int = 60
-) -> Tuple[Optional[str], str]:
+) -> tuple[Optional[str], str]:
     """
     Call GROBID. Return (tei_xml, source_label). source_label in
     {'grobid-fulltext','grobid-header'} if successful, else (None,'').
@@ -323,7 +323,7 @@ def grobid_process(
 
 def ncbi_idconv_from_doi(
     doi: str, email: str, limiter: Optional[RateLimiter]
-) -> Tuple[str, str, str]:
+) -> tuple[str, str, str]:
     """Return (doi, pmid, pmcid). Keeps doi unchanged if NCBI normalizes differently."""
     if not doi:
         return "", "", ""
@@ -355,7 +355,7 @@ def ncbi_idconv_from_doi(
 # --------------------------- Main ---------------------------
 
 
-def find_pdfs(root_dir: str) -> List[str]:
+def find_pdfs(root_dir: str) -> list[str]:
     out = []
     for base, _, files in os.walk(root_dir):
         for fn in files:
