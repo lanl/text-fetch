@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-__all__ = ["ArxivClient", "ArxivArticle", "build_query"]
+__all__ = ["ArxivClient", "ArxivArticle", "build_query", "fetch_arxiv"]
 
 import logging
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 import requests
 
@@ -255,7 +257,157 @@ class ArxivClient:
         try:
             resp = self.session.get(article.pdf_url, timeout=60)
             resp.raise_for_status()
-            return resp.content
+            content: bytes = resp.content
+            return content
         except requests.RequestException as e:
             logger.error("Failed to download PDF for %s: %s", article.arxiv_id, e)
             return None
+
+
+def fetch_arxiv(
+    config: Any = None,
+    query: str | None = None,
+    output_dir: str | Path = "arxiv_output",
+    grobid_url: str | None = None,
+    xslt_path: str | Path | None = None,
+    max_results: int = 100,
+    verbose: bool = False,
+    progress_callback: Any = None,
+) -> dict[str, Any]:
+    """Fetch arXiv articles and convert to JATS.
+
+    Pipeline:
+    1. Search arXiv with query
+    2. Download PDFs
+    3. Convert via GROBID → JATS
+    4. Validate and save
+
+    Args:
+        config: SearchConfig instance (optional if query provided).
+        query: Raw arXiv query (optional if config provided).
+        output_dir: Output directory for JATS files.
+        grobid_url: GROBID service URL.
+        xslt_path: Path to tei2jats.xsl.
+        max_results: Maximum articles to fetch.
+        verbose: Enable verbose logging.
+        progress_callback: Optional callback(arxiv_id, current, total).
+
+    Returns:
+        Statistics dict with search/fetch/conversion results.
+
+    Raises:
+        ValueError: If neither config nor query provided.
+        RuntimeError: If GROBID service is not available.
+    """
+    from .grobid import GROBIDClient
+    from .pmc import JATSValidator, save_pmc_article
+
+    # Validate inputs
+    if config is None and query is None:
+        raise ValueError("Either config or query must be provided")
+
+    # Build query
+    arxiv_query = config.to_arxiv_query() if config else query
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Default XSLT path - look in package root
+    if xslt_path is None:
+        # Try common locations
+        possible_paths = [
+            Path(__file__).parent.parent.parent / "tei2jats.xsl",
+            Path.cwd() / "tei2jats.xsl",
+        ]
+        for p in possible_paths:
+            if p.exists():
+                xslt_path = p
+                break
+        if xslt_path is None:
+            raise ValueError("tei2jats.xsl not found. Please provide xslt_path.")
+
+    # Initialize stats
+    stats: dict[str, Any] = {
+        "query": arxiv_query,
+        "articles_found": 0,
+        "pdfs_downloaded": 0,
+        "converted": 0,
+        "valid": 0,
+        "incomplete": 0,
+        "errors": 0,
+    }
+
+    # Initialize clients
+    arxiv_client = ArxivClient()
+    grobid_client = GROBIDClient(url=grobid_url)
+
+    # Check GROBID availability
+    if not grobid_client.is_available():
+        raise RuntimeError(f"GROBID not available at {grobid_client.url}")
+
+    if verbose:
+        logger.info("Query: %s", arxiv_query)
+        logger.info("GROBID: %s", grobid_client.url)
+
+    # Search arXiv
+    articles = arxiv_client.search(arxiv_query, max_results=max_results)
+    stats["articles_found"] = len(articles)
+
+    if verbose:
+        logger.info("Found %d articles", len(articles))
+
+    if not articles:
+        return stats
+
+    # Process each article
+    validator = JATSValidator()
+    total = len(articles)
+
+    for i, article in enumerate(articles):
+        if progress_callback:
+            progress_callback(article.arxiv_id, i, total)
+
+        try:
+            # Download PDF
+            pdf_bytes = arxiv_client.download_pdf(article)
+            if pdf_bytes is None:
+                stats["errors"] += 1
+                continue
+            stats["pdfs_downloaded"] += 1
+
+            # Convert to JATS via GROBID
+            jats = grobid_client.pdf_to_jats(pdf_bytes, xslt_path)
+            if jats is None:
+                stats["errors"] += 1
+                continue
+            stats["converted"] += 1
+
+            # Save with validation (reuse PMC infrastructure)
+            # Use arxiv: prefix for PMCID field
+            arxiv_pmcid = f"arxiv:{article.arxiv_id}"
+            _saved_path, result, _entry = save_pmc_article(
+                pmcid=arxiv_pmcid,
+                xml_content=jats,
+                output_dir=output_path,
+                validator=validator,
+            )
+
+            if result.status.value == "valid":
+                stats["valid"] += 1
+            else:
+                stats["incomplete"] += 1
+
+        except Exception as e:
+            logger.error("Error processing %s: %s", article.arxiv_id, e)
+            stats["errors"] += 1
+
+    if verbose:
+        logger.info(
+            "Fetch complete: %d converted, %d valid, %d incomplete, %d errors",
+            stats["converted"],
+            stats["valid"],
+            stats["incomplete"],
+            stats["errors"],
+        )
+
+    return stats
