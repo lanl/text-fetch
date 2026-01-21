@@ -19,6 +19,9 @@ Manuscripts/*.pdf
 jats_cache/*.xml 
 tei_cache/*.xml 
 
+# Configuration (contains secrets)
+text-fetch.toml
+
 # Project-specific
 input/
 pubmed_access.py

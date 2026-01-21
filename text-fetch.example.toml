@@ -1,0 +1,26 @@
+# text-fetch configuration file
+# Copy this file to text-fetch.toml and fill in your values
+#
+# Configuration priority (highest to lowest):
+# 1. CLI flags (e.g., --email, --api-key)
+# 2. Environment variables (e.g., NCBI_EMAIL, NCBI_API_KEY)
+# 3. This config file
+#
+# Config file locations searched:
+# 1. ./text-fetch.toml (current directory)
+# 2. ~/.config/text-fetch/config.toml
+
+[ncbi]
+# Required: Your email address for NCBI API identification
+# NCBI requires this for all API requests
+email = "your.email@example.com"
+
+# Optional: NCBI API key for higher rate limits
+# Without key: 3 requests/second
+# With key: 10 requests/second
+# Get your key at: https://www.ncbi.nlm.nih.gov/account/settings/
+# api_key = "your_ncbi_api_key_here"
+
+[grobid]
+# GROBID service URL for PDF processing
+url = "http://localhost:8070"
