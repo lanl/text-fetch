@@ -387,3 +387,112 @@ class NCBIClient:
         result = self.esearch(query, db=db, max_results=max_results)
         idlist: list[str] = result["idlist"]
         return idlist
+
+    def convert_ids(
+        self,
+        ids: list[str],
+        id_type: str = "pmid",
+    ) -> dict[str, str | None]:
+        """Convert PMIDs to PMCIDs or vice versa.
+
+        Uses the NCBI ID Converter service to map between identifiers.
+        Only returns entries that have corresponding PMC full-text.
+
+        Args:
+            ids: List of IDs to convert (PMIDs by default).
+            id_type: Type of input IDs ("pmid", "pmcid", or "doi").
+
+        Returns:
+            Dictionary mapping input IDs to PMCIDs.
+            Value is None if no PMCID exists for that ID.
+            Only PMIDs with PMC full-text will have non-None values.
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> mapping = client.convert_ids(["12345", "67890"])
+            >>> for pmid, pmcid in mapping.items():
+            ...     if pmcid:
+            ...         print(f"PMID {pmid} -> {pmcid}")
+        """
+        if not ids:
+            return {}
+
+        # Process in batches of 200 (API limit)
+        batch_size = 200
+        results: dict[str, str | None] = {}
+
+        for i in range(0, len(ids), batch_size):
+            batch = ids[i : i + batch_size]
+            batch_results = self._convert_ids_batch(batch, id_type)
+            results.update(batch_results)
+
+        return results
+
+    def _convert_ids_batch(
+        self,
+        ids: list[str],
+        id_type: str,
+    ) -> dict[str, str | None]:
+        """Convert a single batch of IDs (internal method).
+
+        Args:
+            ids: List of IDs (max 200).
+            id_type: Type of input IDs.
+
+        Returns:
+            Dictionary mapping input IDs to PMCIDs.
+        """
+        # ID converter uses a different URL and format
+        params: dict[str, Any] = {
+            "ids": ",".join(ids),
+            "idtype": id_type,
+            "format": "json",
+        }
+
+        response = self._request(
+            "",
+            params,
+            base_url=self.ID_CONVERTER_URL.rstrip("/"),
+        )
+
+        results: dict[str, str | None] = {id_: None for id_ in ids}
+
+        # Parse the response
+        records = response.get("records", [])
+        for record in records:
+            # Get the input ID
+            if id_type == "pmid":
+                input_id = record.get("pmid")
+            elif id_type == "doi":
+                input_id = record.get("doi")
+            else:
+                input_id = record.get("pmcid")
+
+            if input_id and input_id in results:
+                # Get PMCID if available
+                pmcid = record.get("pmcid")
+                if pmcid:
+                    results[input_id] = pmcid
+
+        return results
+
+    def get_pmcids(self, pmids: list[str]) -> dict[str, str]:
+        """Get PMCIDs for a list of PMIDs (only those with PMC full-text).
+
+        Convenience method that filters out PMIDs without PMCIDs.
+
+        Args:
+            pmids: List of PubMed IDs.
+
+        Returns:
+            Dictionary mapping PMIDs to PMCIDs (only includes PMIDs
+            that have corresponding PMC full-text).
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> pmids = client.esearch_ids("hlavacek ws[author]")
+            >>> pmcids = client.get_pmcids(pmids)
+            >>> print(f"{len(pmcids)} of {len(pmids)} have PMC full-text")
+        """
+        mapping = self.convert_ids(pmids, id_type="pmid")
+        return {pmid: pmcid for pmid, pmcid in mapping.items() if pmcid is not None}

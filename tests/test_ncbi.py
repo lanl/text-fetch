@@ -393,3 +393,125 @@ class TestNCBIClientESearchIds:
             pmids = client.esearch_ids("nonexistent")
 
         assert pmids == []
+
+
+class TestNCBIClientConvertIds:
+    """Tests for convert_ids method."""
+
+    def test_convert_ids_basic(self, requests_mock: rm.Mocker):
+        """convert_ids maps PMIDs to PMCIDs."""
+        requests_mock.get(
+            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            json={
+                "records": [
+                    {"pmid": "12345", "pmcid": "PMC111111"},
+                    {"pmid": "67890", "pmcid": "PMC222222"},
+                ]
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.convert_ids(["12345", "67890"])
+
+        assert result == {"12345": "PMC111111", "67890": "PMC222222"}
+
+    def test_convert_ids_partial(self, requests_mock: rm.Mocker):
+        """convert_ids returns None for IDs without PMCIDs."""
+        requests_mock.get(
+            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            json={
+                "records": [
+                    {"pmid": "12345", "pmcid": "PMC111111"},
+                    {"pmid": "67890"},  # No PMCID
+                ]
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.convert_ids(["12345", "67890"])
+
+        assert result["12345"] == "PMC111111"
+        assert result["67890"] is None
+
+    def test_convert_ids_empty_input(self):
+        """convert_ids returns empty dict for empty input."""
+        with NCBIClient(email="test@example.com") as client:
+            result = client.convert_ids([])
+
+        assert result == {}
+
+    def test_convert_ids_batching(self, requests_mock: rm.Mocker):
+        """convert_ids processes large lists in batches."""
+        # Create 250 IDs (more than batch size of 200)
+        ids = [str(i) for i in range(250)]
+
+        # Mock should be called twice
+        requests_mock.get(
+            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            [
+                # First batch: 200 IDs
+                {
+                    "json": {
+                        "records": [
+                            {"pmid": str(i), "pmcid": f"PMC{i}"} for i in range(200)
+                        ]
+                    }
+                },
+                # Second batch: 50 IDs
+                {
+                    "json": {
+                        "records": [
+                            {"pmid": str(i), "pmcid": f"PMC{i}"}
+                            for i in range(200, 250)
+                        ]
+                    }
+                },
+            ],
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.convert_ids(ids)
+
+        # Should have made 2 requests
+        assert requests_mock.call_count == 2
+        # Should have all 250 results
+        assert len(result) == 250
+
+    def test_convert_ids_sends_correct_params(self, requests_mock: rm.Mocker):
+        """convert_ids sends correct parameters."""
+        requests_mock.get(
+            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            json={"records": []},
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            client.convert_ids(["123", "456"], id_type="pmid")
+
+        history = requests_mock.request_history[0]
+        assert "ids=123%2C456" in history.url or "ids=123,456" in history.url
+        assert "idtype=pmid" in history.url
+        assert "format=json" in history.url
+
+
+class TestNCBIClientGetPmcids:
+    """Tests for get_pmcids convenience method."""
+
+    def test_get_pmcids_filters_none(self, requests_mock: rm.Mocker):
+        """get_pmcids only returns PMIDs with PMCIDs."""
+        requests_mock.get(
+            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            json={
+                "records": [
+                    {"pmid": "111", "pmcid": "PMC111"},
+                    {"pmid": "222"},  # No PMCID
+                    {"pmid": "333", "pmcid": "PMC333"},
+                ]
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.get_pmcids(["111", "222", "333"])
+
+        # Should only include IDs with PMCIDs
+        assert result == {"111": "PMC111", "333": "PMC333"}
+        assert "222" not in result
