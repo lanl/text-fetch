@@ -227,32 +227,47 @@ def temp_pdf(tmp_path):
     return pdf_path
 ```
 
-## Development Workflow
+## Development Discipline
 
-### Feature Development
+### Task-Commit Cadence
 
-1. **Create a branch**
-   ```bash
-   git checkout -b feature/pmc-integration
-   ```
+> **Rule:** Implement one ~30-minute task → run pre-commit → commit.
 
-2. **Make changes** with frequent commits
-   ```bash
-   git add -p  # Stage changes interactively
-   git commit -m "Add PMC search configuration parsing"
-   ```
+This disciplined approach ensures:
+- **Small, reviewable commits** with clear intent
+- **Lint/type errors caught immediately**, not accumulated
+- **Easy git bisect** if bugs are introduced
+- **Clean history** for archaeology and blame
 
-3. **Run checks locally**
+### Workflow
+
+1. **Pick a task** from the implementation plan (~30 min scope)
+2. **Implement** the task
+3. **Run pre-commit** to verify quality:
    ```bash
    pre-commit run --all-files
-   pytest
    ```
-
-4. **Push and create merge request**
+4. **Commit** with a descriptive message:
    ```bash
-   git push -u origin feature/pmc-integration
-   # Create MR in GitLab
+   git add -p  # Stage changes interactively
+   git commit -m "feat: add PMC search configuration parsing"
    ```
+5. **Repeat** with the next task
+
+### Commit Hygiene
+
+- Each commit **must pass** all pre-commit hooks
+- Each commit should be **atomic** (one logical change)
+- **Never** use `git commit --no-verify`
+- Commit frequently — small commits are better than large ones
+
+### Code Quality Standards
+
+1. **Type hints** on all public functions — mypy catches bugs before runtime
+2. **Docstrings** on all public functions — Google style for consistency
+3. **Tests alongside code** — not deferred to "later"
+4. **No orphan TODOs** — use `# TODO(#issue): description` with issue reference
+5. **Imports sorted** — ruff handles this automatically
 
 ### Commit Messages
 
