@@ -267,3 +267,129 @@ class TestNCBIExceptions:
         error = NCBIRequestError("test error")
         assert str(error) == "test error"
         assert error.status_code is None
+
+
+class TestNCBIClientESearch:
+    """Tests for esearch method."""
+
+    def test_esearch_basic(self, requests_mock: rm.Mocker):
+        """Basic esearch returns structured results."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={
+                "esearchresult": {
+                    "idlist": ["12345", "67890"],
+                    "count": "2",
+                    "querytranslation": "hlavacek ws[Author]",
+                }
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.esearch("hlavacek ws[author]")
+
+        assert result["idlist"] == ["12345", "67890"]
+        assert result["count"] == 2
+        assert result["querytranslation"] == "hlavacek ws[Author]"
+
+    def test_esearch_sends_correct_params(self, requests_mock: rm.Mocker):
+        """esearch sends correct parameters."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={"esearchresult": {"idlist": [], "count": "0"}},
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            client.esearch("test query", db="pmc", max_results=100)
+
+        history = requests_mock.request_history[0]
+        assert "db=pmc" in history.url
+        assert "term=test+query" in history.url or "term=test%20query" in history.url
+        assert "retmax=100" in history.url
+        assert "retmode=json" in history.url
+
+    def test_esearch_with_history(self, requests_mock: rm.Mocker):
+        """esearch with use_history returns webenv and querykey."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={
+                "esearchresult": {
+                    "idlist": ["12345"],
+                    "count": "1",
+                    "webenv": "NCID_1_123456_130.14.22.215",
+                    "querykey": "1",
+                }
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.esearch("test", use_history=True)
+
+        assert result["webenv"] == "NCID_1_123456_130.14.22.215"
+        assert result["querykey"] == "1"
+        assert "usehistory=y" in requests_mock.request_history[0].url
+
+    def test_esearch_empty_results(self, requests_mock: rm.Mocker):
+        """esearch handles empty results."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={"esearchresult": {"idlist": [], "count": "0"}},
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.esearch("nonexistent query xyz123")
+
+        assert result["idlist"] == []
+        assert result["count"] == 0
+
+    def test_esearch_large_count(self, requests_mock: rm.Mocker):
+        """esearch returns count larger than returned IDs."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={
+                "esearchresult": {
+                    "idlist": ["1", "2", "3"],
+                    "count": "15000",
+                }
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            result = client.esearch("common term", max_results=3)
+
+        assert len(result["idlist"]) == 3
+        assert result["count"] == 15000  # Total available
+
+
+class TestNCBIClientESearchIds:
+    """Tests for esearch_ids convenience method."""
+
+    def test_esearch_ids_returns_list(self, requests_mock: rm.Mocker):
+        """esearch_ids returns just the ID list."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={
+                "esearchresult": {
+                    "idlist": ["111", "222", "333"],
+                    "count": "3",
+                }
+            },
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            pmids = client.esearch_ids("test query")
+
+        assert pmids == ["111", "222", "333"]
+        assert isinstance(pmids, list)
+
+    def test_esearch_ids_empty(self, requests_mock: rm.Mocker):
+        """esearch_ids returns empty list for no results."""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={"esearchresult": {"idlist": [], "count": "0"}},
+        )
+
+        with NCBIClient(email="test@example.com") as client:
+            pmids = client.esearch_ids("nonexistent")
+
+        assert pmids == []

@@ -307,3 +307,83 @@ class NCBIClient:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
+
+    def esearch(
+        self,
+        query: str,
+        db: str = "pubmed",
+        max_results: int = 10000,
+        use_history: bool = False,
+    ) -> dict[str, Any]:
+        """Search a database and return matching IDs.
+
+        Args:
+            query: Search query using PubMed query syntax.
+                   Examples: "hlavacek ws[author]", "systems biology[tiab]"
+            db: Database to search (default: "pubmed").
+            max_results: Maximum number of results to return (default: 10000).
+            use_history: If True, store results on server for later retrieval.
+
+        Returns:
+            Dictionary with search results containing:
+            - idlist: List of matching IDs (PMIDs for pubmed)
+            - count: Total number of matches (may exceed max_results)
+            - querytranslation: How NCBI interpreted the query
+            - webenv, querykey: For history-based retrieval (if use_history=True)
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> result = client.esearch("hlavacek ws[author]")
+            >>> pmids = result["idlist"]
+            >>> print(f"Found {result['count']} papers, retrieved {len(pmids)}")
+        """
+        params: dict[str, Any] = {
+            "db": db,
+            "term": query,
+            "retmax": max_results,
+            "retmode": "json",
+        }
+
+        if use_history:
+            params["usehistory"] = "y"
+
+        response = self._request("esearch.fcgi", params)
+
+        # Extract esearchresult from response
+        result = response.get("esearchresult", {})
+
+        # Normalize the response structure
+        return {
+            "idlist": result.get("idlist", []),
+            "count": int(result.get("count", 0)),
+            "querytranslation": result.get("querytranslation", ""),
+            "webenv": result.get("webenv", ""),
+            "querykey": result.get("querykey", ""),
+        }
+
+    def esearch_ids(
+        self,
+        query: str,
+        db: str = "pubmed",
+        max_results: int = 10000,
+    ) -> list[str]:
+        """Search and return just the list of IDs.
+
+        Convenience method that wraps esearch() and returns only the ID list.
+
+        Args:
+            query: Search query using PubMed query syntax.
+            db: Database to search (default: "pubmed").
+            max_results: Maximum number of results to return.
+
+        Returns:
+            List of matching IDs (PMIDs for pubmed database).
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> pmids = client.esearch_ids("hlavacek ws[author]")
+            >>> print(f"Found {len(pmids)} papers")
+        """
+        result = self.esearch(query, db=db, max_results=max_results)
+        idlist: list[str] = result["idlist"]
+        return idlist
