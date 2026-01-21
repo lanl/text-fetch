@@ -1,206 +1,169 @@
 # text-fetch
 
-This project provides a tool to extract metadata and full text from PDF files using GROBID, convert the extracted TEI XML to JATS XML, create a CSV index of the processed documents, and optionally generate a tar.gz archive of the JATS output.
+**Acquire scientific literature for RAG pipelines.**
 
-## Prerequisites
-
-- Python 3.9+
-- Docker (for running GROBID)
-- [uv](https://github.com/astral-sh/uv) package manager (recommended)
+text-fetch provides a unified interface for acquiring full-text scientific literature from multiple sources and converting it to JATS XML format for downstream RAG (Retrieval-Augmented Generation) pipelines. The output is designed for use with [litkit](https://github.com/lanl/litkit) and [chatty](https://github.com/lanl/chatty).
 
 ## Installation
 
-Choose one of the following methods to install dependencies:
+### Prerequisites
 
-### Method 1: Using pip (Recommended)
+- Python 3.9+
+- [uv](https://github.com/astral-sh/uv) package manager (recommended)
+- Docker (for GROBID-based PDF processing)
+
+### Install with uv
 
 ```bash
-pip install -r requirements.txt
+# Clone the repository
+git clone https://github.com/lanl/text-fetch.git
+cd text-fetch
+
+# Install with uv (includes dev dependencies)
+uv sync --all-extras
+
+# Verify installation
+uv run text-fetch --version
 ```
 
-### Method 2: Using uv (Optional - faster package management)
+## Configuration
 
-```bash
-# Install uv
-pip install uv
+text-fetch uses a TOML configuration file. Create `text-fetch.toml` in your project directory or `~/.config/text-fetch/config.toml` for global settings.
 
-# Install dependencies
-uv pip install -r requirements.txt
+```toml
+# text-fetch.toml
+[ncbi]
+email = "your.email@example.com"  # Required for NCBI API
+api_key = "your_api_key"          # Optional: higher rate limits
+
+[grobid]
+url = "http://localhost:8070"     # GROBID service URL
 ```
 
-## GROBID Setup
+See `text-fetch.example.toml` for a complete example.
 
-GROBID is required for PDF processing. Start it with Docker:
+Configuration can also be set via environment variables:
+- `NCBI_EMAIL` - Email for NCBI API
+- `NCBI_API_KEY` - NCBI API key
+
+Priority: CLI options > environment variables > config file
+
+## Commands
+
+### Show Configuration
 
 ```bash
-# Quick start (recommended)
+text-fetch config
+```
+
+### PubMed Central
+
+#### Fetch Articles via E-utilities
+
+Fetch articles by PubMed query:
+
+```bash
+text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output
+```
+
+#### Sync PMC Open Access Corpus
+
+Download and maintain a local mirror of the PMC Open Access subset:
+
+```bash
+# Initial sync (warning: full corpus is ~400GB)
+text-fetch pmc sync --storage /Volumes/External/pmc-oa
+
+# Incremental update (only new/modified articles)
+text-fetch pmc sync --storage /Volumes/External/pmc-oa --update
+
+# Sync specific subset (oa_comm, oa_noncomm, oa_other)
+text-fetch pmc sync --storage ./pmc-oa --subset oa_comm
+
+# Test with limited files
+text-fetch pmc sync --storage ./test-pmc --max-files 10 -y
+```
+
+**Subsets:**
+- `oa_comm` - Commercial use allowed (CC BY, CC0)
+- `oa_noncomm` - Non-commercial use only (CC BY-NC)
+- `oa_other` - Other open access licenses
+
+### PDF Processing
+
+Process PDFs via GROBID and convert to JATS XML:
+
+```bash
+# Start GROBID (requires Docker)
 ./scripts/start_grobid.sh
 
-# Or manually:
-docker rm -f grobid 2>/dev/null || true
-docker run -d --name grobid --restart unless-stopped --init --ulimit core=0 \
-  -p 8070:8070 -p 8071:8071 \
-  grobid/grobid:0.8.2-crf
+# Process PDFs
+text-fetch pdf ./Manuscripts --out ./output
 ```
 
-To stop GROBID: `docker stop grobid`
+## JATS Validation
 
-See [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for more details.
+Downloaded articles are automatically sorted by completeness:
 
-## Usage
+```
+output/
+├── valid/           # Complete JATS (title + abstract + body≥1000 chars)
+│   ├── PMC123456.xml
+│   └── ...
+├── incomplete/      # Missing required parts
+│   ├── PMC789012.xml
+│   └── ...
+└── manifest.json    # Tracks contents + validation results
+```
 
-### Basic Example
+## Quick Start
 
-Process all PDFs in a directory and create a CSV index with TEI and JATS XML files:
+### 1. Configure NCBI Access
 
 ```bash
-python pdf_to_jats.py Manuscripts --out pdf_index.csv --save-tei --save-jats --verbose
+# Create config file
+cat > text-fetch.toml << EOF
+[ncbi]
+email = "your.email@example.com"
+EOF
 ```
 
-### Example with OCR, Metadata Resolution, and Tar.gz Archive
-
-Process PDFs with OCR support, resolve PMID/PMCID from DOIs, and create a tar.gz archive of JATS files:
+### 2. Fetch Articles by Author
 
 ```bash
-python pdf_to_jats.py Manuscripts --out pdf_metadata.csv \
-  --grobid-url http://localhost:8070 \
-  --prefer-fulltext --ocr \
-  --resolve-ncbi --email your.moniker@lanl.gov \
-  --save-tei --tei-out tei_cache \
-  --save-jats --jats-out jats_cache \
-  --create-tarball --tarball-name jats_archive.tar.gz \
-  --normalize-unicode --verbose
+uv run text-fetch pmc fetch --query "perelson as[author]" --out ./perelson
 ```
 
-### Process Specific PDFs
-
-Process only specific PDF files:
+### 3. Sync PMC Open Access (Test)
 
 ```bash
-python pdf_to_jats.py Manuscripts --out pdf_index.csv \
-  --save-tei --save-jats \
-  --only "paper1.pdf,paper2.pdf,paper3.pdf" \
-  --verbose
+uv run text-fetch pmc sync --storage ./pmc-test --subset oa_comm --max-files 5 -y
 ```
 
-## Options
-
-- `--grobid-url`: GROBID service base URL (default: http://localhost:8070)
-- `--prefer-fulltext`: Prefer processFulltextDocument over header
-- `--ocr`: Pass ocr=true to GROBID (effective only if service supports OCR)
-- `--save-tei`: Save TEI XML to --tei-out
-- `--tei-out`: Directory for TEI cache (default: tei_cache)
-- `--save-jats`: Save JATS XML to --jats-out
-- `--jats-out`: Directory for JATS cache (default: jats_cache)
-- `--xslt-path`: Path to TEI→JATS XSLT stylesheet (default: tei2jats.xsl)
-- `--only`: Restrict to specific filename(s); can be given multiple times
-- `--resolve-ncbi`: Resolve PMID/PMCID via NCBI idconv using DOI
-- `--email`: Contact email for NCBI requests (recommended)
-- `--max-req-per-sec`: Throttle for external requests (default: 2.0)
-- `--verbose`: Verbose logging
-- `--timeout`: HTTP timeout for GROBID (default: 60 seconds)
-- `--create-tarball`: Create a tar.gz archive of the JATS output
-- `--tarball-name`: Name of the tar.gz archive (default: jats_output.tar.gz)
-- `--normalize-unicode`: Normalize Unicode characters to ASCII (useful for compatibility with downstream tools)
-
-### Unicode Normalization
-
-The `--normalize-unicode` flag uses the `unidecode` library to convert Unicode characters to their closest ASCII representation. This is particularly useful for handling author names with diacritics or special characters, ensuring better compatibility with tools that may not support Unicode fully.
-
-Example usage:
+## Development
 
 ```bash
-python pdf_to_jats.py Manuscripts --out pdf_index.csv \
-  --save-tei --save-jats \
-  --normalize-unicode \
-  --verbose
+# Install with dev dependencies
+uv sync --all-extras
+
+# Run tests
+uv run pytest
+
+# Run linting
+uv run pre-commit run --all-files
 ```
 
-This will convert characters like "ğ" to "g" in the output CSV and JATS XML files.
+## Documentation
 
-## Output
+- [ROADMAP.md](docs/ROADMAP.md) - Development roadmap and feature status
+- [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) - Contributing guidelines
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture
+- [README_pdf_to_jats.md](docs/README_pdf_to_jats.md) - Legacy `pdf_to_jats.py` script documentation
 
-### CSV Index
+## Related Projects
 
-The script generates a CSV file with the following columns:
-
-- **first_author**: Surname of the first author
-- **year**: Publication year
-- **title**: Article title
-- **journal**: Journal name
-- **DOI**: Digital Object Identifier
-- **PMID**: PubMed ID (if resolved via NCBI)
-- **PMCID**: PubMed Central ID (if resolved via NCBI)
-- **file_path**: Relative path to the PDF file
-- **tei_path**: Path to the cached TEI XML file
-- **jats_path**: Path to the generated JATS XML file
-- **source**: Source of metadata (grobid-fulltext, grobid-header, cache, pdfminer, or unknown)
-- **notes**: Error messages or warnings (if any)
-
-### TEI and JATS XML Files
-
-If `--save-tei` and `--save-jats` options are used:
-
-- **TEI files** are saved in the directory specified by `--tei-out` (default: `tei_cache/`)
-- **JATS files** are saved in the directory specified by `--jats-out` (default: `jats_cache/`)
-- Files are named as `<original_basename>.<sha1_hash>.{tei,jats}.xml` for content-addressable caching
-
-## Features
-
-- **Automatic TEI Caching**: TEI XML files are cached by SHA1 hash of PDF content, avoiding reprocessing of unchanged files
-- **JATS Conversion**: Converts TEI XML to JATS XML using XSLT transformation
-- **Metadata Extraction**: Extracts author, title, journal, DOI, and publication year from PDFs
-- **NCBI Integration**: Optional resolution of PMID/PMCID from DOIs via NCBI E-utilities
-- **OCR Support**: Processes scanned PDFs using GROBID's OCR capabilities (if enabled in GROBID service)
-- **Fallback DOI Extraction**: Uses pdfminer to extract DOI from PDF text if GROBID fails
-- **Rate Limiting**: Configurable throttling for external API requests
-- **Flexible Processing**: Process all PDFs or filter by specific filenames
-
-## Files in This Repository
-
-- **pdf_to_jats.py**: Main script for processing PDFs
-- **tei2jats.xsl**: XSLT stylesheet for converting TEI XML to JATS XML
-- **README.md**: This file
-- **build_plan.txt**: Detailed refactoring plan (for reference)
-- **pyproject.toml**: Project configuration and dependencies
-- **Manuscripts/**: Directory containing PDF files (example)
-
-## Compatibility with litkit
-
-This tool is designed to be compatible with litkit for both Stage 1 (title + abstract) and Stage 2 (body paragraphs) processing:
-
-- The JATS XML output includes both the article metadata and full text content.
-- The abstract is correctly extracted from the TEI and included in the JATS output.
-- Body paragraphs are structured in a way that litkit can easily process for chunked text embeddings.
-
-## Troubleshooting
-
-### GROBID Connection Errors
-
-If you see connection errors, ensure:
-1. Docker Desktop is running
-2. GROBID container is started (`docker ps` should show the container)
-3. GROBID is accessible at `http://localhost:8070`
-
-### XSLT Transformation Errors
-
-If JATS conversion fails:
-1. Ensure `tei2jats.xsl` is in the current directory
-2. Check that the TEI XML file is valid
-3. Verify that `lxml` is properly installed
-
-### Missing Dependencies
-
-If you get import errors, install the required packages:
-```bash
-pip install -r requirements.txt
-```
-
-### tar.gz Archive Creation
-
-If you encounter issues with tar.gz archive creation:
-1. Ensure you have write permissions in the output directory
-2. Verify that the JATS output files were successfully generated
+- **[litkit](https://github.com/lanl/litkit)** - Two-stage RAG pipeline for scientific literature
+- **[chatty](https://github.com/lanl/chatty)** - Terminal UI chatbot with RAG integration
 
 ## License
 
