@@ -90,6 +90,9 @@ class SearchConfig:
     # Date filtering
     date_range: DateRange | None = None
 
+    # arXiv-specific fields
+    arxiv_categories: list[str] = field(default_factory=list)
+
     # Source file path (for error messages)
     source_path: str | None = None
 
@@ -143,6 +146,7 @@ class SearchConfig:
             disease_keywords=data.get("disease_keywords", []),
             vaccine_keywords=data.get("vaccine_keywords", []),
             date_range=date_range,
+            arxiv_categories=data.get("arxiv_categories", []),
             source_path=source_path,
         )
 
@@ -164,6 +168,8 @@ class SearchConfig:
                 "start": self.date_range.start,
                 "end": self.date_range.end,
             }
+        if self.arxiv_categories:
+            result["arxiv_categories"] = self.arxiv_categories
         return result
 
     @property
@@ -295,6 +301,39 @@ class SearchConfig:
 
         return " AND ".join(parts)
 
+    def to_arxiv_query(self) -> str:
+        """Convert config to arXiv query syntax.
+
+        Returns:
+            arXiv query string.
+
+        Raises:
+            SearchConfigError: If config has no searchable criteria.
+
+        Example:
+            >>> config = SearchConfig(author="hlavacek ws")
+            >>> config.to_arxiv_query()
+            'au:"hlavacek ws"'
+        """
+        from .arxiv import build_query
+
+        # Check we have something to search
+        has_author = bool(self.author)
+        has_keywords = bool(self.all_keywords)
+        has_categories = bool(self.arxiv_categories)
+
+        if not has_author and not has_keywords and not has_categories:
+            raise SearchConfigError(
+                "Config must specify at least one of: author, keywords, "
+                "or arxiv_categories for arXiv search"
+            )
+
+        return build_query(
+            author=self.author,
+            all_keywords=self.all_keywords if self.all_keywords else None,
+            categories=self.arxiv_categories if self.arxiv_categories else None,
+        )
+
     def __str__(self) -> str:
         """Return human-readable description."""
         desc_parts = []
@@ -305,4 +344,6 @@ class SearchConfig:
             desc_parts.append(f"keywords={kw_count}")
         if self.date_range:
             desc_parts.append(f"dates={self.date_range.start} to {self.date_range.end}")
+        if self.arxiv_categories:
+            desc_parts.append(f"arxiv_cats={len(self.arxiv_categories)}")
         return f"SearchConfig({', '.join(desc_parts)})"
