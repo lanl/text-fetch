@@ -4,9 +4,9 @@ This project provides a tool to extract metadata and full text from PDF files us
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - Docker (for running GROBID)
-- Required Python packages: `requests`, `lxml`, `pdfminer.six`, `unidecode`
+- [uv](https://github.com/astral-sh/uv) package manager (recommended)
 
 ## Installation
 
@@ -28,59 +28,27 @@ pip install uv
 uv pip install -r requirements.txt
 ```
 
-## GROBID Setup on MacBook Pro
+## GROBID Setup
 
-GROBID is a machine learning library for extracting, parsing, and restructuring raw documents (particularly PDFs) into structured TEI-encoded documents.
+GROBID is required for PDF processing. Start it with Docker:
 
-### Installation Steps
+```bash
+# Start GROBID (clean startup, runs in background)
+docker rm -f grobid 2>/dev/null || true
+docker run -d --name grobid --restart unless-stopped --init --ulimit core=0 \
+  -p 8070:8070 -p 8071:8071 \
+  grobid/grobid:0.8.2-crf
 
-1. **Install Docker Desktop for Mac**
-   - Download from the [official Docker website](https://www.docker.com/products/docker-desktop)
-   - Follow the installation instructions
-   - Start Docker Desktop from Applications
+# Wait for GROBID to be ready (~30 seconds on first startup)
+until curl -sS http://localhost:8070/api/isalive 2>/dev/null; do
+  echo "Waiting for GROBID..."; sleep 2
+done
+echo "GROBID ready"
+```
 
-2. **Pull the GROBID Docker image**
-   
-   Open Terminal and run:
-   ```bash
-   docker pull lfoppiano/grobid:0.7.2
-   ```
+To stop GROBID: `docker stop grobid`
 
-3. **Start the GROBID service**
-   
-   ```bash
-   docker run -t --rm -p 8070:8070 lfoppiano/grobid:0.7.2
-   ```
-   
-   GROBID will now be available at `http://localhost:8070`.
-   
-   **Note:** Keep this terminal window open while processing PDFs. To stop GROBID, press `Ctrl+C`.
-
-4. **Verify GROBID is running**
-   
-   Open your web browser and navigate to `http://localhost:8070`. You should see the GROBID web interface.
-
-## Installation
-
-1. **Clone this repository:**
-
-   ```bash
-   git clone https://github.com/lanl/text-fetch.git
-   cd text-fetch
-   ```
-
-2. **Install the required Python packages:**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-   
-   Or using uv for faster installation:
-   
-   ```bash
-   pip install uv
-   uv pip install -r requirements.txt
-   ```
+See [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for more details.
 
 ## Usage
 
