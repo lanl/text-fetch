@@ -10,6 +10,7 @@ __all__ = [
     "JATSValidator",
     "ValidationResult",
     "ValidationStatus",
+    "fetch_pmc",
     "save_pmc_article",
     "read_manifest",
     "write_manifest",
@@ -424,3 +425,173 @@ def save_pmc_article(
     )
 
     return file_path, result, entry
+
+
+def fetch_pmc(
+    config: Any = None,
+    query: str | None = None,
+    email: str = "",
+    api_key: str | None = None,
+    output_dir: str | Path = "pmc_output",
+    verbose: bool = False,
+    progress_callback: Any = None,
+) -> dict[str, Any]:
+    """Fetch PMC articles via PubMed search.
+
+    Pipeline:
+    1. Build query from SearchConfig or raw string
+    2. Search PubMed via esearch
+    3. Convert PMIDs → PMCIDs (filter to those with full-text)
+    4. Fetch JATS XML for each PMCID
+    5. Validate and save to valid/incomplete folders
+    6. Update manifest
+
+    Args:
+        config: SearchConfig instance (optional if query provided).
+        query: Raw PubMed query string (optional if config provided).
+        email: Email for NCBI API (required).
+        api_key: NCBI API key (optional, for higher rate limits).
+        output_dir: Output directory for downloaded articles.
+        verbose: Enable verbose logging.
+        progress_callback: Optional callback(pmcid, current, total).
+
+    Returns:
+        Statistics dictionary with:
+        - query: The PubMed query used
+        - pmids_found: Number of PMIDs from search
+        - pmcids_available: Number with PMC full-text
+        - fetched: Number successfully fetched
+        - valid: Number passing validation
+        - incomplete: Number incomplete
+        - errors: Number of errors
+        - skipped: Number skipped (already in manifest)
+
+    Raises:
+        ValueError: If neither config nor query provided, or email missing.
+
+    Example:
+        >>> from text_fetch.query import SearchConfig
+        >>> config = SearchConfig(author="hlavacek ws")
+        >>> stats = fetch_pmc(config=config, email="user@example.com")
+        >>> print(f"Fetched {stats['fetched']} articles")
+    """
+    from text_fetch.ncbi import NCBIClient
+
+    # Validate inputs
+    if not email:
+        raise ValueError("Email is required for NCBI API access")
+    if config is None and query is None:
+        raise ValueError("Either config or query must be provided")
+
+    # Build query string
+    pubmed_query = config.to_pubmed_query() if config is not None else query
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize stats
+    stats: dict[str, Any] = {
+        "query": pubmed_query,
+        "pmids_found": 0,
+        "pmcids_available": 0,
+        "fetched": 0,
+        "valid": 0,
+        "incomplete": 0,
+        "errors": 0,
+        "skipped": 0,
+    }
+
+    # Load existing manifest for incremental updates
+    existing_manifest = read_manifest(output_dir)
+    manifest = dict(existing_manifest)
+
+    if verbose:
+        logger.info("Query: %s", pubmed_query)
+
+    # Create NCBI client
+    with NCBIClient(email=email, api_key=api_key) as client:
+        # Step 1: Search PubMed
+        if verbose:
+            logger.info("Searching PubMed...")
+        pmids = client.esearch_ids(pubmed_query)
+        stats["pmids_found"] = len(pmids)
+
+        if verbose:
+            logger.info("Found %d PMIDs", len(pmids))
+
+        if not pmids:
+            write_manifest(output_dir, manifest, metadata={"query": pubmed_query})
+            return stats
+
+        # Step 2: Convert PMIDs to PMCIDs
+        if verbose:
+            logger.info("Converting PMIDs to PMCIDs...")
+        pmcid_map = client.get_pmcids(pmids)
+        stats["pmcids_available"] = len(pmcid_map)
+
+        if verbose:
+            logger.info(
+                "%d of %d have PMC full-text",
+                len(pmcid_map),
+                len(pmids),
+            )
+
+        if not pmcid_map:
+            write_manifest(output_dir, manifest, metadata={"query": pubmed_query})
+            return stats
+
+        # Step 3: Fetch and save each article
+        validator = JATSValidator()
+        pmcids = list(pmcid_map.values())
+        total = len(pmcids)
+
+        for i, pmcid in enumerate(pmcids):
+            if progress_callback:
+                progress_callback(pmcid, i, total)
+
+            try:
+                # Fetch XML
+                xml_content = client.fetch_pmc_xml(pmcid)
+
+                if xml_content is None:
+                    stats["errors"] += 1
+                    continue
+
+                # Save with validation
+                saved_path, result, entry = save_pmc_article(
+                    pmcid=pmcid,
+                    xml_content=xml_content,
+                    output_dir=output_dir,
+                    validator=validator,
+                    existing_manifest=existing_manifest,
+                )
+
+                # Update manifest
+                manifest[entry.pmcid] = entry
+
+                if saved_path is None:
+                    stats["skipped"] += 1
+                else:
+                    stats["fetched"] += 1
+                    if result.status == ValidationStatus.VALID:
+                        stats["valid"] += 1
+                    else:
+                        stats["incomplete"] += 1
+
+            except Exception as e:
+                logger.error("Error fetching %s: %s", pmcid, e)
+                stats["errors"] += 1
+
+    # Write final manifest
+    write_manifest(output_dir, manifest, metadata={"query": pubmed_query})
+
+    if verbose:
+        logger.info(
+            "Fetch complete: %d fetched, %d valid, %d incomplete, %d errors",
+            stats["fetched"],
+            stats["valid"],
+            stats["incomplete"],
+            stats["errors"],
+        )
+
+    return stats
