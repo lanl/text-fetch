@@ -89,9 +89,30 @@ text-fetch pmc sync --storage ./test-pmc --max-files 10 -y
 - `oa_noncomm` - Non-commercial use only (CC BY-NC)
 - `oa_other` - Other open access licenses
 
+### arXiv
+
+Fetch preprints from arXiv (converts PDFs via GROBID):
+
+```bash
+# Start GROBID (requires Docker)
+./scripts/start_grobid.sh
+
+# Search by author
+text-fetch arxiv fetch --query 'au:"hlavacek ws"' --out ./output
+
+# Search by category
+text-fetch arxiv fetch --categories q-bio.MN --out ./output
+
+# Search with multiple categories
+text-fetch arxiv fetch --categories q-bio.MN --categories cs.AI --out ./output
+
+# Using JSON config
+text-fetch arxiv fetch --config-file input/search.json --out ./output
+```
+
 ### PDF Processing
 
-Process PDFs via GROBID and convert to JATS XML:
+Process local PDFs via GROBID and convert to JATS XML:
 
 ```bash
 # Start GROBID (requires Docker)

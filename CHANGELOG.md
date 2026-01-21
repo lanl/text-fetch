@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-01-21
+
+### Added
+- **arXiv Integration** - Fetch preprints from arXiv via PDF→GROBID→JATS pipeline
+  - `text-fetch arxiv fetch` command for searching and downloading preprints
+  - `ArxivClient` class with search and download methods (`arxiv.py`)
+  - `ArxivArticle` dataclass for article metadata
+  - `build_query()` helper for constructing arXiv query syntax
+  - `fetch_arxiv()` orchestrator function (search → download → convert → validate)
+  - Support for arXiv query syntax (au:, ti:, abs:, all:, cat:)
+  - Category-based filtering (e.g., q-bio.MN, cs.AI)
+  - Rate limiting (3-second delay per arXiv guidelines)
+- **GROBID Client Module** - Extracted and enhanced GROBID integration
+  - `GROBIDClient` class with is_available(), process_pdf(), tei_to_jats() methods (`grobid.py`)
+  - Combined `pdf_to_jats()` convenience method
+  - Configurable timeout and URL
+  - Proper error handling and logging
+- **Extended SearchConfig** - arXiv support in query builder (`query.py`)
+  - New `arxiv_categories` field for category filtering
+  - New `to_arxiv_query()` method for arXiv query syntax generation
+
+### Changed
+- Extracted GROBID client from `pdf.py` into dedicated `grobid.py` module
+- Added `GROBIDClient` to package exports in `__init__.py`
+
+### Tests
+- Added 13 new tests for GROBID client (`test_grobid.py`)
+- Added 18 new tests for arXiv client (`test_arxiv.py`)
+- Total test count: 236 (all passing)
+
 ## [0.1.1] - 2026-01-21
 
 ### Added

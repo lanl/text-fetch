@@ -4,48 +4,49 @@ This document describes the architecture and design of text-fetch, a tool for ac
 
 ## Overview
 
-text-fetch is a data acquisition utility that sits upstream of [litkit](https://github.com/lanl/litkit) in the RAG pipeline. It fetches scientific papers from various sources, converts them to a standard JATS XML format, and packages them into tar archives for downstream processing.
+text-fetch is a data acquisition utility that sits upstream of [litkit](https://github.com/lanl/litkit) in the RAG pipeline. It fetches scientific papers from various sources, converts them to a standard JATS XML format, and packages them for downstream processing.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              text-fetch                                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                     │
-│  │  User PDFs   │   │    PubMed    │   │   Preprint   │                     │
-│  │              │   │   Central    │   │   Archives   │                     │
-│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘                     │
-│         │                  │                  │                              │
-│         ▼                  ▼                  ▼                              │
-│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐                     │
-│  │    GROBID    │   │  Direct XML  │   │ GROBID/XML   │                     │
-│  │   (Docker)   │   │   Download   │   │   Hybrid     │                     │
-│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘                     │
-│         │                  │                  │                              │
-│         ▼                  │                  │                              │
-│  ┌──────────────┐          │                  │                              │
-│  │   TEI XML    │          │                  │                              │
-│  └──────┬───────┘          │                  │                              │
-│         │                  │                  │                              │
-│         ▼                  │                  │                              │
-│  ┌──────────────┐          │                  │                              │
-│  │ XSLT Transform│         │                  │                              │
-│  │ (tei2jats.xsl)│         │                  │                              │
-│  └──────┬───────┘          │                  │                              │
-│         │                  │                  │                              │
-│         └──────────────────┴──────────────────┘                              │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │
+│  │  User PDFs   │   │    PubMed    │   │    arXiv     │   │   Preprint   │  │
+│  │              │   │   Central    │   │  (v0.1.2)    │   │   Archives   │  │
+│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘  │
+│         │                  │                  │                  │          │
+│         ▼                  ▼                  ▼                  ▼          │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐  │
+│  │    GROBID    │   │  Direct XML  │   │    GROBID    │   │ GROBID/XML   │  │
+│  │   (Docker)   │   │   Download   │   │   Pipeline   │   │   Hybrid     │  │
+│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘  │
+│         │                  │                  │                  │          │
+│         ▼                  │                  ▼                  │          │
+│  ┌──────────────┐          │           ┌──────────────┐          │          │
+│  │   TEI XML    │          │           │   TEI XML    │          │          │
+│  └──────┬───────┘          │           └──────┬───────┘          │          │
+│         │                  │                  │                  │          │
+│         ▼                  │                  ▼                  │          │
+│  ┌──────────────┐          │           ┌──────────────┐          │          │
+│  │ XSLT Transform│         │           │ XSLT Transform│         │          │
+│  │ (tei2jats.xsl)│         │           │ (tei2jats.xsl)│         │          │
+│  └──────┬───────┘          │           └──────┬───────┘          │          │
+│         │                  │                  │                  │          │
+│         └──────────────────┴──────────────────┴──────────────────┘          │
 │                            │                                                 │
 │                            ▼                                                 │
 │                     ┌──────────────┐                                         │
 │                     │   JATS XML   │                                         │
-│                     │    Cache     │                                         │
+│                     │  Validation  │                                         │
 │                     └──────┬───────┘                                         │
 │                            │                                                 │
 │                            ▼                                                 │
-│                     ┌──────────────┐                                         │
-│                     │ Tar Archive  │                                         │
-│                     │   + CSV      │                                         │
-│                     └──────────────┘                                         │
+│               ┌────────────┴────────────┐                                    │
+│               ▼                         ▼                                    │
+│        ┌──────────────┐          ┌──────────────┐                            │
+│        │    valid/    │          │  incomplete/ │                            │
+│        └──────────────┘          └──────────────┘                            │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -62,6 +63,28 @@ text-fetch is a data acquisition utility that sits upstream of [litkit](https://
                         └──────────────────────┘
 ```
 
+## Package Structure
+
+```
+text-fetch/
+├── src/text_fetch/
+│   ├── __init__.py       # Package exports
+│   ├── cli.py            # Click-based CLI (main entry point)
+│   ├── config.py         # TOML configuration handling
+│   ├── common.py         # Shared utilities (RateLimiter, clean, sha1_of_file)
+│   ├── grobid.py         # GROBIDClient for PDF→TEI→JATS
+│   ├── arxiv.py          # ArxivClient and fetch_arxiv orchestrator
+│   ├── ncbi.py           # NCBIClient for E-utilities
+│   ├── pmc.py            # PMC fetching and JATS validation
+│   ├── pmc_oa.py         # PMC Open Access corpus sync
+│   ├── query.py          # SearchConfig and query builders
+│   └── pdf.py            # Legacy PDF processing functions
+├── pdf_to_jats.py        # Legacy standalone script
+├── tei2jats.xsl          # XSLT stylesheet
+├── tests/                # Test suite
+└── docs/                 # Documentation
+```
+
 ## Data Sources
 
 ### 1. User PDFs (v0.1.0)
@@ -73,11 +96,11 @@ PDF → GROBID → TEI XML → XSLT → JATS XML
 ```
 
 **Components:**
-- **GROBID**: Machine learning library for document parsing (runs in Docker)
+- **GROBIDClient** (`grobid.py`): Sends PDFs to GROBID, handles TEI→JATS conversion
 - **TEI XML**: Intermediate format produced by GROBID
 - **XSLT Stylesheet**: `tei2jats.xsl` transforms TEI to JATS
 
-### 2. PubMed Central (v0.1.1 — Planned)
+### 2. PubMed Central (v0.1.1)
 
 PMC provides JATS/NXML directly for open-access content:
 
@@ -86,98 +109,171 @@ JSON Search Config → NCBI E-utilities → PMID List → PMC ID Converter → J
 ```
 
 **Components:**
-- **Search Configuration**: JSON files defining search parameters
-- **E-utilities**: NCBI's web API (esearch, efetch)
-- **ID Converter**: Maps PMIDs to PMCIDs
-- **OA Service**: Downloads full-text XML
+- **SearchConfig** (`query.py`): JSON/dict configuration for searches
+- **NCBIClient** (`ncbi.py`): E-utilities API wrapper
+- **JATSValidator** (`pmc.py`): Validates and sorts downloaded articles
+- **PMCOAClient** (`pmc_oa.py`): Bulk download of OA corpus
 
-### 3. Preprint Archives (v0.2.x — Planned)
+### 3. arXiv (v0.1.2)
+
+arXiv preprints are downloaded as PDFs and converted via GROBID:
+
+```
+arXiv Query → ArxivClient → PDF Download → GROBID → TEI → XSLT → JATS
+```
+
+**Components:**
+- **ArxivClient** (`arxiv.py`): Searches arXiv API, downloads PDFs
+- **GROBIDClient** (`grobid.py`): Converts PDFs to JATS
+- **fetch_arxiv()**: Orchestrates the full pipeline
+
+### 4. bioRxiv/medRxiv (v0.1.3 — Planned)
 
 Mixed approach depending on source:
 
 | Source | Full-text Format | Strategy |
 |--------|------------------|----------|
-| arXiv | PDF (+ LaTeX) | PDF → GROBID → JATS |
-| bioRxiv | JATS XML | Direct download |
-| medRxiv | JATS XML | Direct download |
+| bioRxiv | JATS XML | Direct download (with PDF fallback) |
+| medRxiv | JATS XML | Direct download (with PDF fallback) |
 | ChemRxiv | PDF | PDF → GROBID → JATS |
 
-## Core Components
+## Core Modules
 
-### PDF Processing (`pdf_to_jats.py`)
+### CLI (`cli.py`)
 
-The main entry point for PDF processing:
+The main entry point using Click framework:
 
 ```python
-# Key functions
-grobid_process()      # Send PDF to GROBID, get TEI
-parse_tei_fields()    # Extract metadata from TEI
-tei_to_jats()         # XSLT transformation
-create_tarball()      # Package output
+# Command groups
+text-fetch pmc fetch     # Fetch from PMC via E-utilities
+text-fetch pmc sync      # Sync PMC OA corpus
+text-fetch arxiv fetch   # Fetch from arXiv
+text-fetch pdf           # Process local PDFs
+text-fetch config        # Show configuration
 ```
 
-**Processing flow:**
-1. Scan directory for PDFs
-2. Compute SHA1 hash for cache key
-3. Check TEI cache; call GROBID if miss
-4. Parse TEI for metadata (author, title, DOI, etc.)
-5. Optionally resolve PMID/PMCID via NCBI
-6. Transform TEI → JATS via XSLT
-7. Write to cache and CSV index
-8. Create tar.gz archive
+### Configuration (`config.py`)
 
-### Caching Strategy
+TOML-based configuration with priority resolution:
 
-Content-addressable caching using SHA1 hashes:
-
-```
-<basename>.<sha1>.tei.xml   # TEI cache
-<basename>.<sha1>.jats.xml  # JATS cache
+```python
+# Priority: CLI > env vars > config file > defaults
+config = load_config()
+email = get_ncbi_email(cli_value=None, config=config)
 ```
 
-**Benefits:**
-- Unchanged PDFs are never reprocessed
-- Cache is portable (based on content, not path)
-- Easy to identify duplicate content
+**Config locations:**
+1. `./text-fetch.toml` (project directory)
+2. `~/.config/text-fetch/config.toml` (user config)
 
-### External Services
+### GROBID Client (`grobid.py`)
 
-| Service | Purpose | Rate Limit |
-|---------|---------|------------|
-| GROBID | PDF → TEI extraction | Local (unlimited) |
-| NCBI E-utilities | PubMed search, ID conversion | 3 req/sec (with API key) |
-| NCBI idconv | DOI → PMID/PMCID | 3 req/sec |
+Handles all GROBID interactions:
 
-Rate limiting is handled by the `RateLimiter` class.
+```python
+class GROBIDClient:
+    def is_available(self) -> bool: ...
+    def process_pdf(self, pdf_bytes, header_only=False) -> str | None: ...
+    def tei_to_jats(self, tei_xml, xslt_path) -> str | None: ...
+    def pdf_to_jats(self, pdf_bytes, xslt_path) -> str | None: ...
+```
 
-## Directory Structure
+### arXiv Client (`arxiv.py`)
+
+Searches and downloads from arXiv:
+
+```python
+@dataclass
+class ArxivArticle:
+    arxiv_id: str
+    title: str
+    authors: list[str]
+    abstract: str
+    categories: list[str]
+    published: datetime
+    pdf_url: str | None
+
+class ArxivClient:
+    def search(self, query, max_results=100) -> list[ArxivArticle]: ...
+    def download_pdf(self, article) -> bytes | None: ...
+
+def build_query(author=None, categories=None, ...) -> str: ...
+def fetch_arxiv(config=None, query=None, ...) -> dict[str, Any]: ...
+```
+
+### NCBI Client (`ncbi.py`)
+
+Wraps NCBI E-utilities API:
+
+```python
+class NCBIClient:
+    def esearch(self, query, db="pubmed") -> dict: ...
+    def esearch_ids(self, query) -> list[str]: ...
+    def get_pmcids(self, pmids) -> dict[str, str]: ...
+    def fetch_pmc_xml(self, pmcid) -> str | None: ...
+```
+
+### PMC Module (`pmc.py`)
+
+JATS validation and article saving:
+
+```python
+class JATSValidator:
+    def validate(self, xml_content) -> ValidationResult: ...
+
+def save_pmc_article(pmcid, xml_content, output_dir, ...) -> tuple: ...
+def fetch_pmc(config=None, query=None, ...) -> dict[str, Any]: ...
+```
+
+### Query Builder (`query.py`)
+
+Search configuration with multi-database support:
+
+```python
+@dataclass
+class SearchConfig:
+    author: str | None
+    keywords: list[str]
+    date_range: DateRange | None
+    arxiv_categories: list[str]  # For arXiv searches
+    
+    def to_pubmed_query(self) -> str: ...
+    def to_arxiv_query(self) -> str: ...
+```
+
+## JATS Validation
+
+Downloaded articles are automatically sorted by completeness:
 
 ```
-text-fetch/
-├── pdf_to_jats.py       # Main CLI script
-├── tei2jats.xsl         # XSLT stylesheet
-├── pyproject.toml       # Project configuration
-├── requirements.txt     # Dependencies
-├── input/               # Search configuration files (gitignored)
-│   └── *.json
-├── Manuscripts/         # Input PDFs (gitignored)
-├── tei_cache/           # TEI XML cache
-├── jats_cache/          # JATS XML cache
-└── docs/
-    ├── ROADMAP.md
-    ├── ARCHITECTURE.md
-    └── DEVELOPER_GUIDE.md
+output/
+├── valid/           # Complete JATS (title + abstract + body≥1000 chars)
+│   ├── PMC123456.xml
+│   ├── arxiv:2301.12345v1.xml
+│   └── ...
+├── incomplete/      # Missing required parts
+│   ├── PMC789012.xml
+│   └── ...
+└── manifest.json    # Tracks contents + validation results
 ```
+
+**Validation criteria for "valid":**
+- ✅ Has `<article-title>` (non-empty)
+- ✅ Has `<abstract>` (non-empty)
+- ✅ Has `<body>` with ≥1000 characters of content
+
+## External Services
+
+| Service | Purpose | Rate Limit | Module |
+|---------|---------|------------|--------|
+| GROBID | PDF → TEI extraction | Local (unlimited) | `grobid.py` |
+| NCBI E-utilities | PubMed search, PMC download | 3-9 req/sec | `ncbi.py` |
+| arXiv API | Preprint search | 1 req/3 sec | `arxiv.py` |
+| arXiv PDF | PDF download | 1 req/3 sec | `arxiv.py` |
+
+Rate limiting is handled by the `RateLimiter` class in `common.py`.
 
 ## Output Formats
-
-### CSV Index
-
-Metadata index with columns:
-- `first_author`, `year`, `title`, `journal`
-- `DOI`, `PMID`, `PMCID`
-- `file_path`, `tei_path`, `jats_path`
-- `source`, `notes`
 
 ### JATS XML
 
@@ -201,68 +297,64 @@ Standard [JATS](https://jats.nlm.nih.gov/) format compatible with litkit:
 </article>
 ```
 
-### Tar Archives
+### Manifest JSON
 
-Uncompressed `.tar` files (or `.tar.gz` for transfer) containing JATS XML files:
+Tracks downloaded articles with validation results:
 
-```bash
-# Structure expected by litkit
-archive.tar
-├── paper1.jats.xml
-├── paper2.jats.xml
-└── ...
+```json
+{
+  "version": "1.0",
+  "updated_at": "2026-01-21T12:00:00Z",
+  "statistics": {
+    "total": 100,
+    "valid": 85,
+    "incomplete": 15
+  },
+  "articles": [
+    {
+      "pmcid": "PMC123456",
+      "filename": "valid/PMC123456.xml",
+      "status": "valid",
+      "has_title": true,
+      "has_abstract": true,
+      "has_body": true,
+      "body_chars": 25000,
+      "saved_at": "2026-01-21T12:00:00Z",
+      "sha256": "abc123..."
+    }
+  ]
+}
 ```
 
 ## Integration with litkit
 
-litkit expects tar archives containing JATS/NXML files:
+litkit expects directories containing JATS/NXML files:
 
 ```bash
 # text-fetch produces
-python pdf_to_jats.py Manuscripts --save-jats --create-tarball
+text-fetch pmc fetch --query "hlavacek ws[au]" --out ./corpus
 
 # litkit consumes
-litkit --build-only --faiss-writer --tar-dir workspace/tar_shards
+litkit --build-only --faiss-writer --jats-dir ./corpus/valid
 ```
 
 **Key requirements:**
 - JATS XML with `<front>` (metadata) and `<body>` (full text)
 - Abstract in `<abstract>` element for Stage 1 indexing
 - Body paragraphs in `<p>` elements for Stage 2 chunking
-- No duplicate papers (text-fetch is responsible for deduplication)
+- No duplicate papers (text-fetch handles deduplication via SHA256)
 
 ## Error Handling
 
 | Error Type | Handling |
 |------------|----------|
-| GROBID connection failure | Retry with fallback to pdfminer for DOI |
-| TEI parse error | Log to `notes` column, continue processing |
-| XSLT transformation failure | Log error, skip JATS generation |
-| NCBI API error | Log warning, proceed without IDs |
-| Rate limit exceeded | Wait and retry |
-
-## Configuration
-
-### Command-line Arguments
-
-```bash
-python pdf_to_jats.py <pdf_root> \
-  --out <csv_path> \
-  --grobid-url http://localhost:8070 \
-  --prefer-fulltext \
-  --save-tei --tei-out tei_cache \
-  --save-jats --jats-out jats_cache \
-  --resolve-ncbi --email user@example.com \
-  --create-tarball --tarball-name output.tar.gz
-```
-
-### Environment Variables (Planned)
-
-```bash
-TEXT_FETCH_GROBID_URL=http://localhost:8070
-TEXT_FETCH_NCBI_EMAIL=user@example.com
-TEXT_FETCH_OUTPUT_DIR=./output
-```
+| GROBID unavailable | Raise RuntimeError (arXiv), log warning (PDF) |
+| GROBID parse error | Return None, count as error in stats |
+| NCBI API error | Retry with exponential backoff, then raise |
+| arXiv API error | Log error, return empty list |
+| arXiv rate limit | Wait 3 seconds between requests |
+| Invalid JATS | Sort to `incomplete/` folder |
+| Network timeout | Retry with backoff |
 
 ## Dependencies
 
@@ -270,8 +362,10 @@ TEXT_FETCH_OUTPUT_DIR=./output
 
 | Package | Purpose |
 |---------|---------|
-| requests | HTTP client for GROBID and NCBI |
-| lxml | XML parsing and XSLT transformation |
+| click | CLI framework |
+| requests | HTTP client |
+| lxml | XML parsing and XSLT |
+| tomli | TOML parsing (Python < 3.11) |
 | pdfminer-six | Fallback DOI extraction |
 | unidecode | Unicode normalization |
 
@@ -281,10 +375,11 @@ TEXT_FETCH_OUTPUT_DIR=./output
 |---------|-------------|
 | GROBID | Docker container (`lfoppiano/grobid:0.7.2`) |
 | NCBI E-utilities | Internet access, optional API key |
+| arXiv API | Internet access |
 
 ## Security Considerations
 
-- API keys should be stored securely (environment variables or files with restricted permissions)
-- GROBID runs locally, no data leaves the machine
+- API keys stored in config files should have restricted permissions
+- GROBID runs locally, no data leaves the machine for PDF processing
 - NCBI requests include email for identification per their guidelines
-- No authentication data in CSV output or logs
+- No authentication data in manifest or logs
