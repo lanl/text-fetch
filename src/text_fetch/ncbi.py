@@ -108,13 +108,13 @@ class NCBIClient:
             params["api_key"] = self.api_key
         return params
 
-    def _request(
+    def _request_raw(
         self,
         endpoint: str,
         params: dict[str, Any],
         base_url: str | None = None,
-    ) -> dict[str, Any]:
-        """Make rate-limited request to NCBI.
+    ) -> requests.Response:
+        """Make rate-limited request with retry logic.
 
         Args:
             endpoint: API endpoint (e.g., "esearch.fcgi").
@@ -122,11 +122,10 @@ class NCBIClient:
             base_url: Optional base URL override (for ID converter, etc.).
 
         Returns:
-            Parsed JSON response as a dictionary.
+            Raw requests.Response object.
 
         Raises:
             NCBIRequestError: If the request fails after all retries.
-            NCBIRateLimitError: If rate limit is exceeded.
         """
         url = f"{base_url or self.BASE_URL}/{endpoint}"
         all_params = {**self._base_params(), **params}
@@ -174,14 +173,14 @@ class NCBIClient:
                 # Raise for client errors (4xx)
                 response.raise_for_status()
 
-                # Parse JSON response
-                data: dict[str, Any] = response.json()
-                return data
+                return response
 
             except requests.exceptions.Timeout as e:
                 last_error = e
                 logger.warning(
-                    "Request timeout (attempt %d/%d)", attempt + 1, self.max_retries + 1
+                    "Request timeout (attempt %d/%d)",
+                    attempt + 1,
+                    self.max_retries + 1,
                 )
                 if attempt < self.max_retries:
                     time.sleep(self.retry_delay * (2**attempt))
@@ -204,13 +203,36 @@ class NCBIClient:
                     status_code=e.response.status_code if e.response else None,
                 ) from e
 
-            except requests.exceptions.JSONDecodeError as e:
-                raise NCBIRequestError(f"Invalid JSON response: {e}") from e
-
         # All retries exhausted
         raise NCBIRequestError(
             f"Request failed after {self.max_retries + 1} attempts: {last_error}"
         )
+
+    def _request(
+        self,
+        endpoint: str,
+        params: dict[str, Any],
+        base_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Make rate-limited request to NCBI and parse JSON response.
+
+        Args:
+            endpoint: API endpoint (e.g., "esearch.fcgi").
+            params: Request parameters.
+            base_url: Optional base URL override (for ID converter, etc.).
+
+        Returns:
+            Parsed JSON response as a dictionary.
+
+        Raises:
+            NCBIRequestError: If the request fails after all retries.
+        """
+        response = self._request_raw(endpoint, params, base_url)
+        try:
+            data: dict[str, Any] = response.json()
+            return data
+        except requests.exceptions.JSONDecodeError as e:
+            raise NCBIRequestError(f"Invalid JSON response: {e}") from e
 
     def _request_xml(
         self,
@@ -231,79 +253,8 @@ class NCBIClient:
         Raises:
             NCBIRequestError: If the request fails after all retries.
         """
-        url = f"{base_url or self.BASE_URL}/{endpoint}"
-        all_params = {**self._base_params(), **params}
-
-        last_error: Exception | None = None
-
-        for attempt in range(self.max_retries + 1):
-            self.limiter.wait()
-
-            try:
-                logger.debug(
-                    "NCBI XML request: %s (attempt %d/%d)",
-                    endpoint,
-                    attempt + 1,
-                    self.max_retries + 1,
-                )
-                response = self.session.get(
-                    url,
-                    params=all_params,
-                    timeout=self.timeout,
-                )
-
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get("Retry-After", 60))
-                    logger.warning(
-                        "NCBI rate limit hit, waiting %d seconds", retry_after
-                    )
-                    time.sleep(retry_after)
-                    continue
-
-                if response.status_code >= 500:
-                    logger.warning(
-                        "NCBI server error %d, retrying...", response.status_code
-                    )
-                    if attempt < self.max_retries:
-                        time.sleep(self.retry_delay * (2**attempt))
-                        continue
-                    raise NCBIRequestError(
-                        f"Server error: {response.status_code}",
-                        status_code=response.status_code,
-                    )
-
-                response.raise_for_status()
-                return response.text
-
-            except requests.exceptions.Timeout as e:
-                last_error = e
-                logger.warning(
-                    "Request timeout (attempt %d/%d)", attempt + 1, self.max_retries + 1
-                )
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_delay * (2**attempt))
-                    continue
-
-            except requests.exceptions.ConnectionError as e:
-                last_error = e
-                logger.warning(
-                    "Connection error (attempt %d/%d)",
-                    attempt + 1,
-                    self.max_retries + 1,
-                )
-                if attempt < self.max_retries:
-                    time.sleep(self.retry_delay * (2**attempt))
-                    continue
-
-            except requests.exceptions.HTTPError as e:
-                raise NCBIRequestError(
-                    f"HTTP error: {e}",
-                    status_code=e.response.status_code if e.response else None,
-                ) from e
-
-        raise NCBIRequestError(
-            f"Request failed after {self.max_retries + 1} attempts: {last_error}"
-        )
+        response = self._request_raw(endpoint, params, base_url)
+        return response.text
 
     def close(self) -> None:
         """Close the underlying HTTP session."""
