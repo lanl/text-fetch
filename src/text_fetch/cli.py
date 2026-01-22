@@ -1218,6 +1218,8 @@ def europepmc_fetch(
     help="Comma-separated sources to use (overrides config)",
 )
 @click.option("--no-dedupe", is_flag=True, help="Disable DOI deduplication")
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def unified_fetch_cmd(
@@ -1229,6 +1231,8 @@ def unified_fetch_cmd(
     grobid_url: str | None,
     sources: str | None,
     no_dedupe: bool,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch articles from multiple sources using unified config.
@@ -1349,6 +1353,19 @@ def unified_fetch_cmd(
     click.echo(f"Total incomplete: {stats['total_incomplete']:,}")
     click.echo(f"Duplicates removed: {stats['duplicates_removed']:,}")
     click.echo(f"\nOutput: {out}/")
+
+    # Create tarball if requested
+    cmd = f"text-fetch fetch --config-file {config_file} --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=search_config.to_dict(),
+        command=cmd,
+        source="unified",
+        verbose=verbose,
+    )
 
 
 @cli.command(name="config")
