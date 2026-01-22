@@ -26,3 +26,4 @@ text-fetch.toml
 input/
 pubmed_access.py
 prompt.rtf
+.coverage
