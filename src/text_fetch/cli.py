@@ -457,6 +457,203 @@ def arxiv_fetch(
     click.echo(f"\nOutput: {out}/")
 
 
+@cli.group()
+@click.pass_context
+def biorxiv(ctx: click.Context) -> None:
+    """bioRxiv preprint commands."""
+    pass
+
+
+@biorxiv.command(name="fetch")
+@click.option("--start-date", help="Start date (YYYY-MM-DD)")
+@click.option("--end-date", help="End date (YYYY-MM-DD)")
+@click.option("--days", type=int, help="Recent N days (alternative to date range)")
+@click.option("--category", help="bioRxiv category filter (use underscore for spaces)")
+@click.option("--doi", multiple=True, help="Specific DOIs to fetch")
+@click.option("--max-results", default=100, help="Maximum results")
+@click.option("--out", required=True, help="Output directory")
+@click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def biorxiv_fetch(
+    ctx: click.Context,
+    start_date: str | None,
+    end_date: str | None,
+    days: int | None,
+    category: str | None,
+    doi: tuple[str, ...],
+    max_results: int,
+    out: str,
+    grobid_url: str | None,
+    verbose: bool,
+) -> None:
+    """Fetch preprints from bioRxiv.
+
+    Downloads JATS XML directly when available, falls back to PDF→GROBID.
+
+    \b
+    Examples:
+        # Recent 30 days of systems biology
+        text-fetch biorxiv fetch --days 30 --category systems_biology --out ./output
+
+        # Date range
+        text-fetch biorxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+
+        # Specific DOIs
+        text-fetch biorxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+    """
+    import logging
+
+    from .biorxiv import fetch_biorxiv
+
+    config = ctx.obj["config"]
+    resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+        click.echo(f"GROBID URL (fallback): {resolved_grobid}")
+
+    # Progress bar
+    progress_bar = None
+
+    def progress_callback(doi_str: str, current: int, total: int) -> None:
+        nonlocal progress_bar
+        if progress_bar is None:
+            progress_bar = click.progressbar(
+                length=total,
+                label="Fetching articles",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        progress_bar.update(1)
+
+    try:
+        stats = fetch_biorxiv(
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            days=days,
+            dois=list(doi) if doi else None,
+            output_dir=out,
+            grobid_url=resolved_grobid,
+            max_results=max_results,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("Fetch complete!")
+    click.echo(f"  Articles found: {stats['articles_found']:,}")
+    click.echo(f"  Direct JATS: {stats['jats_direct']:,}")
+    click.echo(f"  Via GROBID: {stats['pdf_converted']:,}")
+    click.echo(f"    Valid: {stats['valid']:,}")
+    click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo(f"\nOutput: {out}/")
+
+
+@cli.group()
+@click.pass_context
+def medrxiv(ctx: click.Context) -> None:
+    """medRxiv preprint commands."""
+    pass
+
+
+@medrxiv.command(name="fetch")
+@click.option("--start-date", help="Start date (YYYY-MM-DD)")
+@click.option("--end-date", help="End date (YYYY-MM-DD)")
+@click.option("--days", type=int, help="Recent N days (alternative to date range)")
+@click.option("--category", help="medRxiv category filter (use underscore for spaces)")
+@click.option("--doi", multiple=True, help="Specific DOIs to fetch")
+@click.option("--max-results", default=100, help="Maximum results")
+@click.option("--out", required=True, help="Output directory")
+@click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def medrxiv_fetch(
+    ctx: click.Context,
+    start_date: str | None,
+    end_date: str | None,
+    days: int | None,
+    category: str | None,
+    doi: tuple[str, ...],
+    max_results: int,
+    out: str,
+    grobid_url: str | None,
+    verbose: bool,
+) -> None:
+    """Fetch preprints from medRxiv.
+
+    Downloads JATS XML directly when available, falls back to PDF→GROBID.
+
+    \b
+    Examples:
+        # Recent epidemiology preprints
+        text-fetch medrxiv fetch --days 30 --category epidemiology --out ./output
+
+        # Date range
+        text-fetch medrxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+    """
+    import logging
+
+    from .biorxiv import fetch_medrxiv
+
+    config = ctx.obj["config"]
+    resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+        click.echo(f"GROBID URL (fallback): {resolved_grobid}")
+
+    # Progress bar
+    progress_bar = None
+
+    def progress_callback(doi_str: str, current: int, total: int) -> None:
+        nonlocal progress_bar
+        if progress_bar is None:
+            progress_bar = click.progressbar(
+                length=total,
+                label="Fetching articles",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        progress_bar.update(1)
+
+    try:
+        stats = fetch_medrxiv(
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            days=days,
+            dois=list(doi) if doi else None,
+            output_dir=out,
+            grobid_url=resolved_grobid,
+            max_results=max_results,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("Fetch complete!")
+    click.echo(f"  Articles found: {stats['articles_found']:,}")
+    click.echo(f"  Direct JATS: {stats['jats_direct']:,}")
+    click.echo(f"  Via GROBID: {stats['pdf_converted']:,}")
+    click.echo(f"    Valid: {stats['valid']:,}")
+    click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo(f"\nOutput: {out}/")
+
+
 @cli.command(name="config")
 @click.option("--show", is_flag=True, help="Show resolved configuration")
 @click.pass_context
