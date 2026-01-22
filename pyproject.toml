@@ -33,9 +33,6 @@ text-fetch = "text_fetch.cli:cli"
 requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-py-modules = ["pdf_to_jats"]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
