@@ -153,6 +153,11 @@ def pdf(ctx: click.Context) -> None:
     is_flag=True,
     help="Convert Unicode characters to ASCII",
 )
+@click.option(
+    "--ocr",
+    is_flag=True,
+    help="Enable OCR for scanned PDFs (requires GROBID with Tesseract)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -170,6 +175,7 @@ def pdf_batch(
     api_key: str | None,
     csv_path: str | None,
     normalize_unicode: bool,
+    ocr: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -208,6 +214,8 @@ def pdf_batch(
     click.echo(f"Found {len(pdfs)} PDF files in {pdf_dir}")
     click.echo(f"Output directory: {output_dir}")
     click.echo(f"GROBID URL: {grobid}")
+    if ocr:
+        click.echo("OCR: enabled")
 
     def progress_callback(name: str, current: int, total: int) -> None:
         if verbose:
@@ -224,6 +232,7 @@ def pdf_batch(
         email=email,
         api_key=api_key,
         normalize_unicode=normalize_unicode,
+        ocr=ocr,
         progress_callback=progress_callback,
     )
 

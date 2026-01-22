@@ -57,12 +57,16 @@ class GROBIDClient:
         self,
         pdf_content: bytes,
         full_text: bool = True,
+        ocr: bool = False,
+        consolidate_header: bool = True,
     ) -> str | None:
         """Convert PDF to TEI XML.
 
         Args:
             pdf_content: PDF file bytes.
             full_text: If True, use processFulltextDocument endpoint.
+            ocr: If True, enable OCR for scanned PDFs (requires GROBID with Tesseract).
+            consolidate_header: If True, consolidate header for better metadata.
 
         Returns:
             TEI XML string or None on failure.
@@ -71,10 +75,18 @@ class GROBIDClient:
         endpoint = "processFulltextDocument" if full_text else "processHeaderDocument"
         url = f"{self.url}/api/{endpoint}"
 
+        # Build form data
+        data: dict[str, str] = {}
+        if consolidate_header:
+            data["consolidateHeader"] = "1"
+        if ocr:
+            data["ocr"] = "true"
+
         try:
             resp = requests.post(
                 url,
                 files={"input": ("document.pdf", pdf_content, "application/pdf")},
+                data=data if data else None,
                 timeout=self.timeout,
             )
             if resp.status_code == 200:
@@ -109,17 +121,19 @@ class GROBIDClient:
         self,
         pdf_content: bytes,
         xslt_path: Path | str,
+        ocr: bool = False,
     ) -> str | None:
         """Full pipeline: PDF → TEI → JATS.
 
         Args:
             pdf_content: PDF file bytes.
             xslt_path: Path to tei2jats.xsl stylesheet.
+            ocr: If True, enable OCR for scanned PDFs.
 
         Returns:
             JATS XML string or None on failure.
         """
-        tei = self.process_pdf(pdf_content)
+        tei = self.process_pdf(pdf_content, ocr=ocr)
         if not tei:
             return None
         return self.tei_to_jats(tei, xslt_path)

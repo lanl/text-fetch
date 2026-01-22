@@ -194,6 +194,7 @@ def process_pdf(
     jats_output_dir: Path | None = None,
     prefer_fulltext: bool = True,
     normalize_unicode: bool = False,
+    ocr: bool = False,
 ) -> PDFProcessingResult:
     """Process a single PDF through GROBID pipeline.
 
@@ -205,6 +206,7 @@ def process_pdf(
         jats_output_dir: Directory for JATS output (optional).
         prefer_fulltext: If True, use processFulltextDocument first.
         normalize_unicode: If True, convert Unicode to ASCII.
+        ocr: If True, enable OCR for scanned PDFs.
 
     Returns:
         PDFProcessingResult with processing details.
@@ -234,6 +236,7 @@ def process_pdf(
         tei_xml = grobid_client.process_pdf(
             pdf_bytes,
             full_text=prefer_fulltext,
+            ocr=ocr,
         )
         if tei_xml:
             result.source = "grobid-fulltext" if prefer_fulltext else "grobid-header"
@@ -268,6 +271,7 @@ def process_pdf_batch(
     email: str | None = None,
     api_key: str | None = None,
     normalize_unicode: bool = False,
+    ocr: bool = False,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Process all PDFs in a directory.
@@ -283,6 +287,7 @@ def process_pdf_batch(
         email: Email for NCBI API (required if resolve_ncbi).
         api_key: NCBI API key (optional).
         normalize_unicode: Convert Unicode to ASCII.
+        ocr: Enable OCR for scanned PDFs.
         progress_callback: Optional callback(pdf_name, current, total).
 
     Returns:
@@ -344,6 +349,7 @@ def process_pdf_batch(
                 jats_output_dir=None,  # We handle JATS saving manually
                 prefer_fulltext=prefer_fulltext,
                 normalize_unicode=normalize_unicode,
+                ocr=ocr,
             )
 
             # NCBI ID resolution
@@ -368,6 +374,7 @@ def process_pdf_batch(
                 )
 
             if tei_content:
+                # Note: TEI already has OCR results, no need to re-process
                 jats_xml = grobid.tei_to_jats(tei_content, xslt)
 
                 if jats_xml:
