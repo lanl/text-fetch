@@ -654,6 +654,223 @@ def medrxiv_fetch(
     click.echo(f"\nOutput: {out}/")
 
 
+@cli.group()
+@click.pass_context
+def chemrxiv(ctx: click.Context) -> None:
+    """ChemRxiv preprint commands."""
+    pass
+
+
+@chemrxiv.command(name="fetch")
+@click.option("--term", help="Search query (title, abstract, authors)")
+@click.option(
+    "--category",
+    multiple=True,
+    help="Category filter (e.g., organic_chemistry)",
+)
+@click.option("--date-from", help="Start date (YYYY-MM-DD)")
+@click.option("--date-to", help="End date (YYYY-MM-DD)")
+@click.option("--item-id", multiple=True, help="Specific item IDs to fetch")
+@click.option("--max-results", default=100, help="Maximum results")
+@click.option("--out", required=True, help="Output directory")
+@click.option("--grobid-url", help="GROBID service URL (required)")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def chemrxiv_fetch(
+    ctx: click.Context,
+    term: str | None,
+    category: tuple[str, ...],
+    date_from: str | None,
+    date_to: str | None,
+    item_id: tuple[str, ...],
+    max_results: int,
+    out: str,
+    grobid_url: str | None,
+    verbose: bool,
+) -> None:
+    """Fetch preprints from ChemRxiv.
+
+    Requires GROBID for PDF→JATS conversion (no native JATS available).
+
+    \b
+    Examples:
+        # Search by term
+        text-fetch chemrxiv fetch --term "catalysis" --out ./output
+
+        # Filter by category
+        text-fetch chemrxiv fetch --category organic_chemistry --out ./output
+
+        # Date range
+        text-fetch chemrxiv fetch --date-from 2024-01-01 --out ./output
+
+        # Specific item IDs
+        text-fetch chemrxiv fetch --item-id item_2024-abc123 --out ./output
+    """
+    import logging
+
+    from .chemrxiv import fetch_chemrxiv, get_category_ids
+
+    config = ctx.obj["config"]
+    resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+        click.echo(f"GROBID URL: {resolved_grobid}")
+
+    # Convert category names to IDs
+    category_ids = get_category_ids(list(category)) if category else None
+
+    # Progress bar
+    progress_bar = None
+
+    def progress_callback(item_id_str: str, current: int, total: int) -> None:
+        nonlocal progress_bar
+        if progress_bar is None:
+            progress_bar = click.progressbar(
+                length=total,
+                label="Fetching articles",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        progress_bar.update(1)
+
+    try:
+        stats = fetch_chemrxiv(
+            term=term,
+            category_ids=category_ids,
+            date_from=date_from,
+            date_to=date_to,
+            item_ids=list(item_id) if item_id else None,
+            output_dir=out,
+            grobid_url=resolved_grobid,
+            max_results=max_results,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    except RuntimeError as e:
+        raise click.ClickException(str(e)) from e
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("Fetch complete!")
+    click.echo(f"  Articles found: {stats['articles_found']:,}")
+    click.echo(f"  PDFs downloaded: {stats['pdfs_downloaded']:,}")
+    click.echo(f"  Converted: {stats['converted']:,}")
+    click.echo(f"    Valid: {stats['valid']:,}")
+    click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo(f"\nOutput: {out}/")
+
+
+@cli.group()
+@click.pass_context
+def europepmc(ctx: click.Context) -> None:
+    """Europe PMC commands."""
+    pass
+
+
+@europepmc.command(name="fetch")
+@click.option("--query", help="Raw Lucene query string")
+@click.option("--author", help="Author name")
+@click.option("--keyword", multiple=True, help="Keywords to search")
+@click.option("--date-from", help="Start date (YYYY-MM-DD)")
+@click.option("--date-to", help="End date (YYYY-MM-DD)")
+@click.option("--pmcid", multiple=True, help="Specific PMC IDs to fetch")
+@click.option("--max-results", default=100, help="Maximum results")
+@click.option("--include-non-oa", is_flag=True, help="Include non-open-access")
+@click.option("--out", required=True, help="Output directory")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def europepmc_fetch(
+    ctx: click.Context,
+    query: str | None,
+    author: str | None,
+    keyword: tuple[str, ...],
+    date_from: str | None,
+    date_to: str | None,
+    pmcid: tuple[str, ...],
+    max_results: int,
+    include_non_oa: bool,
+    out: str,
+    verbose: bool,
+) -> None:
+    """Fetch articles from Europe PMC.
+
+    Downloads native JATS XML (no GROBID required).
+
+    \b
+    Examples:
+        # Search by author
+        text-fetch europepmc fetch --author "hlavacek ws" --out ./output
+
+        # Search with keywords
+        text-fetch europepmc fetch --keyword "systems biology" --out ./output
+
+        # Date range
+        text-fetch europepmc fetch --author "perelson" --date-from 2020-01-01 --out ./output
+
+        # Raw Lucene query
+        text-fetch europepmc fetch --query 'AUTH:"hlavacek" AND TITLE:modeling' --out ./output
+
+        # Specific PMC IDs
+        text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 --out ./output
+    """
+    import logging
+
+    from .europepmc import fetch_europepmc
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+
+    # Progress bar
+    progress_bar = None
+
+    def progress_callback(pmcid_str: str, current: int, total: int) -> None:
+        nonlocal progress_bar
+        if progress_bar is None:
+            progress_bar = click.progressbar(
+                length=total,
+                label="Fetching articles",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        progress_bar.update(1)
+
+    try:
+        stats = fetch_europepmc(
+            query=query,
+            author=author,
+            keywords=list(keyword) if keyword else None,
+            date_from=date_from,
+            date_to=date_to,
+            pmcids=list(pmcid) if pmcid else None,
+            output_dir=out,
+            max_results=max_results,
+            open_access_only=not include_non_oa,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 50)
+    click.echo("Fetch complete!")
+    click.echo(f"  Articles found: {stats['articles_found']:,}")
+    click.echo(f"  Full-text available: {stats['full_text_available']:,}")
+    click.echo(f"  Downloaded: {stats['fetched']:,}")
+    click.echo(f"    Valid: {stats['valid']:,}")
+    click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo(f"\nOutput: {out}/")
+
+
 @cli.command(name="config")
 @click.option("--show", is_flag=True, help="Show resolved configuration")
 @click.pass_context

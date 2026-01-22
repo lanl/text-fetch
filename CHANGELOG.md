@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-01-21
+
+### Added
+- **Europe PMC Integration** - Fetch articles from Europe PMC with native JATS XML
+  - `text-fetch europepmc fetch` command for Europe PMC articles
+  - `EuropePMCClient` class for Europe PMC REST API (`europepmc.py`)
+  - `EuropePMCArticle` dataclass for article metadata
+  - Native JATS XML download (no GROBID required)
+  - Lucene query syntax support (`AUTH:`, `TITLE:`, `DOI:`, etc.)
+  - Cursor-based pagination for efficient deep queries
+  - Search by author (`--author`)
+  - Search by keywords (`--keyword`)
+  - Date range filtering (`--date-from`, `--date-to`)
+  - Raw query support (`--query` for Lucene syntax)
+  - PMC ID lookup (`--pmcid`)
+  - Open access filtering (`--include-non-oa` to disable)
+  - `build_query()` helper for constructing Lucene queries
+  - `fetch_europepmc()` orchestrator function
+  - ID lookup methods: `get_by_pmcid()`, `get_by_pmid()`, `get_by_doi()`
+  - `normalize_pmcid()` utility for ID format normalization
+
+### Key Advantages
+- **No GROBID required** - Europe PMC provides native JATS XML
+- **Faster pagination** - Cursor-based vs offset-based
+- **Simpler query syntax** - Lucene instead of E-utilities
+- **European content** - Access to Horizon 2020/Europe funded research
+
+### Tests
+- Added 30 new tests for Europe PMC client (`test_europepmc.py`)
+
+## [0.1.4] - 2026-01-21
+
+### Added
+- **ChemRxiv Integration** - Fetch preprints from ChemRxiv chemistry server
+  - `text-fetch chemrxiv fetch` command for ChemRxiv preprints
+  - `ChemrxivClient` class for ChemRxiv public API (`chemrxiv.py`)
+  - `ChemrxivArticle` dataclass for article metadata
+  - PDF→GROBID→JATS pipeline (ChemRxiv has no native JATS XML)
+  - Search by term (`--term` for title/abstract/authors)
+  - Date range filtering (`--date-from`, `--date-to`)
+  - Category filtering (`--category`)
+  - Item ID lookup (`--item-id`)
+  - Pagination via skip/limit (automatic iteration)
+  - `CHEMRXIV_CATEGORIES` constant (22 categories)
+  - `get_category_id()` and `get_category_ids()` helper functions
+  - `fetch_chemrxiv()` orchestrator function
+
+### Tests
+- Added 25 new tests for ChemRxiv client (`test_chemrxiv.py`)
+- Total test count: 277 (all passing)
+
 ## [0.1.3] - 2026-01-21
 
 ### Added

@@ -110,6 +110,101 @@ text-fetch arxiv fetch --categories q-bio.MN --categories cs.AI --out ./output
 text-fetch arxiv fetch --config-file input/search.json --out ./output
 ```
 
+### bioRxiv
+
+Fetch preprints from bioRxiv (direct JATS XML when available, falls back to PDF→GROBID):
+
+```bash
+# Recent preprints by category
+text-fetch biorxiv fetch --days 30 --category systems_biology --out ./output
+
+# Date range
+text-fetch biorxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+
+# Specific DOIs
+text-fetch biorxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+
+# Multiple DOIs
+text-fetch biorxiv fetch --doi 10.1101/2024.01.15.111111 --doi 10.1101/2024.01.15.222222 --out ./output
+```
+
+**Categories:** See `BIORXIV_CATEGORIES` in the code for all 27 supported categories (e.g., `systems_biology`, `bioinformatics`, `genomics`).
+
+### medRxiv
+
+Fetch preprints from medRxiv (direct JATS XML when available, falls back to PDF→GROBID):
+
+```bash
+# Recent epidemiology preprints
+text-fetch medrxiv fetch --days 30 --category epidemiology --out ./output
+
+# Date range
+text-fetch medrxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+
+# Specific DOIs
+text-fetch medrxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+```
+
+**Categories:** See `MEDRXIV_CATEGORIES` in the code for all 52 supported categories (e.g., `epidemiology`, `infectious_diseases`, `public_and_global_health`).
+
+### ChemRxiv
+
+Fetch preprints from ChemRxiv (requires GROBID - no native JATS available):
+
+```bash
+# Start GROBID (requires Docker)
+./scripts/start_grobid.sh
+
+# Search by term
+text-fetch chemrxiv fetch --term "catalysis" --out ./output
+
+# Filter by category
+text-fetch chemrxiv fetch --category organic_chemistry --out ./output
+
+# Date range
+text-fetch chemrxiv fetch --date-from 2024-01-01 --date-to 2024-12-31 --out ./output
+
+# Specific item IDs
+text-fetch chemrxiv fetch --item-id item_2024-abc123 --out ./output
+
+# Combined filters
+text-fetch chemrxiv fetch --term "synthesis" --category organic_chemistry --max-results 50 --out ./output
+```
+
+**Categories:** See `CHEMRXIV_CATEGORIES` in the code for all 22 supported categories (e.g., `organic_chemistry`, `inorganic_chemistry`, `biochemistry`, `catalysis`).
+
+### Europe PMC
+
+Fetch articles from Europe PMC (native JATS XML - no GROBID required):
+
+```bash
+# Search by author
+text-fetch europepmc fetch --author "hlavacek ws" --out ./output
+
+# Search with keywords
+text-fetch europepmc fetch --keyword "systems biology" --out ./output
+
+# Date range
+text-fetch europepmc fetch --author "perelson" --date-from 2020-01-01 --out ./output
+
+# Raw Lucene query
+text-fetch europepmc fetch --query 'AUTH:"hlavacek" AND TITLE:modeling' --out ./output
+
+# Specific PMC IDs
+text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 --out ./output
+
+# Include non-open-access results
+text-fetch europepmc fetch --author "smith" --include-non-oa --out ./output
+```
+
+**Key advantages:**
+- **No GROBID required** - Europe PMC provides native JATS XML
+- **Lucene query syntax** - Familiar, powerful query language
+- **Cursor-based pagination** - Fast for deep result sets
+- **European content** - Access to Horizon 2020/Europe funded research
+
+**Query syntax:** Uses Lucene syntax (`AUTH:`, `TITLE:`, `DOI:`, `KEYWORD:`, `FIRST_PDATE:`, etc.). See [Europe PMC documentation](https://europepmc.org/RestfulWebService).
+
 ### PDF Processing
 
 Process local PDFs via GROBID and convert to JATS XML:
