@@ -871,6 +871,155 @@ def europepmc_fetch(
     click.echo(f"\nOutput: {out}/")
 
 
+@cli.command(name="fetch")
+@click.option(
+    "--config-file",
+    type=click.Path(exists=True),
+    required=True,
+    help="JSON search configuration file",
+)
+@click.option("--out", required=True, help="Output directory")
+@click.option("--email", envvar="NCBI_EMAIL", help="Email for NCBI requests")
+@click.option("--api-key", envvar="NCBI_API_KEY", help="NCBI API key")
+@click.option("--grobid-url", help="GROBID service URL")
+@click.option(
+    "--sources",
+    help="Comma-separated sources to use (overrides config)",
+)
+@click.option("--no-dedupe", is_flag=True, help="Disable DOI deduplication")
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def unified_fetch_cmd(
+    ctx: click.Context,
+    config_file: str,
+    out: str,
+    email: str | None,
+    api_key: str | None,
+    grobid_url: str | None,
+    sources: str | None,
+    no_dedupe: bool,
+    verbose: bool,
+) -> None:
+    """Fetch articles from multiple sources using unified config.
+
+    \b
+    Examples:
+        # Fetch from all sources in config
+        text-fetch fetch --config-file input/hlavacek.json --out ./output
+
+        # Override sources
+        text-fetch fetch --config-file input/search.json \\
+            --sources pmc,europepmc --out ./output
+
+        # Disable deduplication
+        text-fetch fetch --config-file input/search.json --no-dedupe --out ./output
+    """
+    import logging
+
+    from .fetch import unified_fetch
+    from .query import SearchConfig, SearchConfigError
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+
+    app_config = ctx.obj["config"]
+
+    # Resolve settings
+    resolved_email = None
+    import contextlib
+
+    with contextlib.suppress(ValueError):
+        # Email only required if pmc source is used
+        resolved_email = get_ncbi_email(cli_value=email, config=app_config)
+
+    resolved_api_key = get_ncbi_api_key(cli_value=api_key, config=app_config)
+    resolved_grobid = get_grobid_url(cli_value=grobid_url, config=app_config)
+
+    # Load search config
+    try:
+        search_config = SearchConfig.from_json(config_file)
+    except SearchConfigError as e:
+        raise click.UsageError(f"Invalid config: {e}") from e
+
+    # Override sources if specified
+    if sources:
+        search_config.sources = sources.split(",")
+
+    # Override deduplication
+    if no_dedupe:
+        search_config.deduplicate_by_doi = False
+
+    # Validate email if pmc source is used
+    effective_sources = search_config.sources or ["pmc"]
+    if "pmc" in effective_sources and not resolved_email:
+        raise click.UsageError(
+            "NCBI email required for PMC source. "
+            "Set via --email, NCBI_EMAIL env var, or config file."
+        )
+
+    # Show config summary
+    click.echo(f"Config: {config_file}")
+    click.echo(f"Sources: {', '.join(effective_sources)}")
+    click.echo(f"Max per source: {search_config.max_results_per_source}")
+    click.echo(f"Deduplicate: {search_config.deduplicate_by_doi}")
+    click.echo()
+
+    # Progress tracking
+    current_source: list[str | None] = [None]
+    progress_bar: list[click.progressbar | None] = [None]
+
+    def progress_callback(
+        source: str, article_id: str, current: int, total: int
+    ) -> None:
+        if source != current_source[0]:
+            if progress_bar[0] is not None:
+                progress_bar[0].__exit__(None, None, None)
+            current_source[0] = source
+            progress_bar[0] = click.progressbar(
+                length=total,
+                label=f"Fetching {source}",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar[0].__enter__()
+        if progress_bar[0] is not None:
+            progress_bar[0].update(1)
+
+    try:
+        stats = unified_fetch(
+            config=search_config,
+            output_dir=out,
+            email=resolved_email,
+            api_key=resolved_api_key,
+            grobid_url=resolved_grobid,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if progress_bar[0] is not None:
+            progress_bar[0].__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 60)
+    click.echo("Unified fetch complete!")
+    click.echo()
+    click.echo("Per-source statistics:")
+    for source, source_stats in stats["per_source"].items():
+        if "error" in source_stats:
+            click.echo(f"  {source}: ERROR - {source_stats['error']}")
+        else:
+            click.echo(
+                f"  {source}: {source_stats.get('fetched', 0)} fetched, "
+                f"{source_stats.get('valid', 0)} valid"
+            )
+    click.echo()
+    click.echo(f"Total fetched: {stats['total_fetched']:,}")
+    click.echo(f"Total valid: {stats['total_valid']:,}")
+    click.echo(f"Total incomplete: {stats['total_incomplete']:,}")
+    click.echo(f"Duplicates removed: {stats['duplicates_removed']:,}")
+    click.echo(f"\nOutput: {out}/")
+
+
 @cli.command(name="config")
 @click.option("--show", is_flag=True, help="Show resolved configuration")
 @click.pass_context

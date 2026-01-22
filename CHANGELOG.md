@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-01-21
+
+### Added
+- **Unified Multi-Source Fetch** - Single command to fetch from multiple sources
+  - `text-fetch fetch` command with `--config-file` option
+  - JSON config with `sources` array and `source_options` per-source config
+  - DOI-based deduplication across sources (keeps first by priority)
+  - Unified `manifest.json` with per-source statistics
+  - `unified_fetch()` orchestrator function (`fetch.py`)
+  - `deduplicate_by_doi()` utility function for DOI-based deduplication
+  - `SourceOptions` dataclass for per-source configuration
+  - `ALL_SOURCES` constant listing available sources
+
+### Enhanced
+- Extended `SearchConfig` with multi-source support (`query.py`)
+  - `name` and `description` metadata fields
+  - `sources` field to specify which sources to search
+  - `source_options` for per-source category filters
+  - `max_results_per_source` limit (default: 100)
+  - `open_access_only` flag (default: True)
+  - `deduplicate_by_doi` flag (default: True)
+  - `to_europepmc_query()` method for Europe PMC queries
+  - `to_biorxiv_params()` method for bioRxiv/medRxiv params
+  - `to_chemrxiv_params()` method for ChemRxiv params
+
+### CLI
+- `--sources` option to override config sources
+- `--no-dedupe` flag to disable deduplication
+- Per-source progress bars with source name labels
+- Summary showing per-source statistics
+
+### Tests
+- Added tests for multi-source SearchConfig extensions
+- Added tests for SourceOptions dataclass
+- Added tests for DOI-based deduplication
+- Added tests for callback wrapper helper
+
 ## [0.1.5] - 2026-01-21
 
 ### Added

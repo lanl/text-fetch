@@ -205,6 +205,66 @@ text-fetch europepmc fetch --author "smith" --include-non-oa --out ./output
 
 **Query syntax:** Uses Lucene syntax (`AUTH:`, `TITLE:`, `DOI:`, `KEYWORD:`, `FIRST_PDATE:`, etc.). See [Europe PMC documentation](https://europepmc.org/RestfulWebService).
 
+### Unified Multi-Source Fetch
+
+Fetch articles from multiple sources with a single JSON config file:
+
+```bash
+# Create a search config file
+cat > input/hlavacek.json << 'EOF'
+{
+  "name": "hlavacek_corpus",
+  "description": "Publications by William S. Hlavacek",
+  "author": "hlavacek ws",
+  "keywords": ["systems biology", "rule-based modeling"],
+  "sources": ["pmc", "europepmc", "biorxiv"],
+  "source_options": {
+    "biorxiv": {"categories": ["systems_biology"]}
+  },
+  "max_results_per_source": 100,
+  "deduplicate_by_doi": true
+}
+EOF
+
+# Fetch from all sources in config
+text-fetch fetch --config-file input/hlavacek.json --out ./output
+
+# Override sources from command line
+text-fetch fetch --config-file input/hlavacek.json --sources pmc,europepmc --out ./output
+
+# Disable DOI deduplication
+text-fetch fetch --config-file input/hlavacek.json --no-dedupe --out ./output
+```
+
+**Config options:**
+- `name` / `description` - Metadata for the search
+- `author` - Author name to search
+- `keywords` - Keywords to search in title/abstract
+- `sources` - Array of sources: `pmc`, `europepmc`, `arxiv`, `biorxiv`, `medrxiv`, `chemrxiv`
+- `source_options` - Per-source configuration (categories, etc.)
+- `max_results_per_source` - Limit per source (default: 100)
+- `open_access_only` - Only fetch open access articles (default: true)
+- `deduplicate_by_doi` - Remove duplicates across sources (default: true)
+
+**Output structure:**
+```
+output/
+├── pmc/
+│   ├── valid/
+│   └── incomplete/
+├── europepmc/
+│   ├── valid/
+│   └── incomplete/
+├── biorxiv/
+│   ├── valid/
+│   └── incomplete/
+├── _duplicates/      # Removed duplicates
+├── duplicates.json   # Deduplication log
+└── manifest.json     # Unified manifest with stats
+```
+
+**Deduplication priority:** PMC > Europe PMC > bioRxiv > medRxiv > arXiv > ChemRxiv
+
 ### PDF Processing
 
 Process local PDFs via GROBID and convert to JATS XML:
