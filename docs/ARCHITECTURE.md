@@ -72,12 +72,16 @@ text-fetch/
 │   ├── cli.py            # Click-based CLI (main entry point)
 │   ├── config.py         # TOML configuration handling
 │   ├── common.py         # Shared utilities (RateLimiter, clean, sha1_of_file)
+│   ├── fetch.py          # Unified multi-source fetch orchestrator (v0.1.6)
+│   ├── query.py          # SearchConfig and query builders
 │   ├── grobid.py         # GROBIDClient for PDF→TEI→JATS
-│   ├── arxiv.py          # ArxivClient and fetch_arxiv orchestrator
 │   ├── ncbi.py           # NCBIClient for E-utilities
 │   ├── pmc.py            # PMC fetching and JATS validation
 │   ├── pmc_oa.py         # PMC Open Access corpus sync
-│   ├── query.py          # SearchConfig and query builders
+│   ├── europepmc.py      # EuropePMCClient for Europe PMC (v0.1.5)
+│   ├── arxiv.py          # ArxivClient and fetch_arxiv orchestrator
+│   ├── biorxiv.py        # BiorxivClient for bioRxiv/medRxiv (v0.1.3)
+│   ├── chemrxiv.py       # ChemrxivClient for ChemRxiv (v0.1.4)
 │   └── pdf.py            # Legacy PDF processing functions
 ├── pdf_to_jats.py        # Legacy standalone script
 ├── tei2jats.xsl          # XSLT stylesheet
@@ -127,14 +131,61 @@ arXiv Query → ArxivClient → PDF Download → GROBID → TEI → XSLT → JAT
 - **GROBIDClient** (`grobid.py`): Converts PDFs to JATS
 - **fetch_arxiv()**: Orchestrates the full pipeline
 
-### 4. bioRxiv/medRxiv (v0.1.3 — Planned)
+### 4. bioRxiv/medRxiv (v0.1.3)
 
-Mixed approach depending on source:
+Direct JATS download with PDF fallback:
+
+```
+bioRxiv API → BiorxivClient → Direct JATS or PDF → GROBID → JATS
+```
+
+**Components:**
+- **BiorxivClient** (`biorxiv.py`): Date-based search, DOI lookup, JATS/PDF download
+- **fetch_biorxiv()** / **fetch_medrxiv()**: Orchestrators for each server
+
+### 5. ChemRxiv (v0.1.4)
+
+PDF-only source requiring GROBID:
+
+```
+ChemRxiv API → ChemrxivClient → PDF Download → GROBID → TEI → XSLT → JATS
+```
+
+**Components:**
+- **ChemrxivClient** (`chemrxiv.py`): Search, item lookup, PDF download
+- **fetch_chemrxiv()**: Orchestrates the full pipeline
+
+### 6. Europe PMC (v0.1.5)
+
+Native JATS access without GROBID:
+
+```
+Europe PMC REST API → EuropePMCClient → JATS/NXML
+```
+
+**Components:**
+- **EuropePMCClient** (`europepmc.py`): Lucene query syntax, cursor pagination
+- **fetch_europepmc()**: Orchestrates search and download
+
+### 7. Unified Multi-Source Fetch (v0.1.6)
+
+Single command to fetch from multiple sources:
+
+```
+JSON Config → unified_fetch() → [per-source fetchers] → deduplicate_by_doi() → Output
+```
+
+**Components:**
+- **unified_fetch()** (`fetch.py`): Orchestrates fetching from multiple sources
+- **deduplicate_by_doi()** (`fetch.py`): Removes duplicate DOIs across sources
 
 | Source | Full-text Format | Strategy |
 |--------|------------------|----------|
-| bioRxiv | JATS XML | Direct download (with PDF fallback) |
-| medRxiv | JATS XML | Direct download (with PDF fallback) |
+| PMC | JATS XML | Direct download |
+| Europe PMC | JATS XML | Direct download |
+| bioRxiv | JATS XML | Direct (PDF fallback) |
+| medRxiv | JATS XML | Direct (PDF fallback) |
+| arXiv | PDF | PDF → GROBID → JATS |
 | ChemRxiv | PDF | PDF → GROBID → JATS |
 
 ## Core Modules
@@ -236,9 +287,28 @@ class SearchConfig:
     keywords: list[str]
     date_range: DateRange | None
     arxiv_categories: list[str]  # For arXiv searches
+    sources: list[str]           # For unified fetch (v0.1.6)
+    source_options: dict[str, SourceOptions]  # Per-source config
     
     def to_pubmed_query(self) -> str: ...
     def to_arxiv_query(self) -> str: ...
+    def to_europepmc_query(self) -> str: ...  # v0.1.6
+    def to_biorxiv_params(self) -> dict: ...  # v0.1.6
+    def to_chemrxiv_params(self) -> dict: ... # v0.1.6
+```
+
+### Unified Fetch (`fetch.py`)
+
+Multi-source orchestrator (v0.1.6):
+
+```python
+def unified_fetch(config, output_dir, ...) -> dict[str, Any]:
+    """Fetch from multiple sources using unified config."""
+    ...
+
+def deduplicate_by_doi(output_dir) -> dict[str, Any]:
+    """Remove duplicate DOIs across sources."""
+    ...
 ```
 
 ## JATS Validation
@@ -270,6 +340,9 @@ output/
 | NCBI E-utilities | PubMed search, PMC download | 3-9 req/sec | `ncbi.py` |
 | arXiv API | Preprint search | 1 req/3 sec | `arxiv.py` |
 | arXiv PDF | PDF download | 1 req/3 sec | `arxiv.py` |
+| bioRxiv API | Preprint search | None documented | `biorxiv.py` |
+| ChemRxiv API | Preprint search | None documented | `chemrxiv.py` |
+| Europe PMC | Article search | None documented | `europepmc.py` |
 
 Rate limiting is handled by the `RateLimiter` class in `common.py`.
 
