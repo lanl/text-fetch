@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-01-21
+
+### Added
+- **bioRxiv/medRxiv Integration** - Fetch preprints with direct JATS XML download
+  - `text-fetch biorxiv fetch` command for bioRxiv preprints
+  - `text-fetch medrxiv fetch` command for medRxiv preprints
+  - `BiorxivClient` class for api.biorxiv.org API (`biorxiv.py`)
+  - `BiorxivArticle` dataclass for article metadata
+  - Direct JATS XML download from `jatsxml` field (preferred)
+  - PDF→GROBID→JATS fallback when JATS not available
+  - Date-based search (`--start-date`, `--end-date`, `--days`)
+  - DOI-based lookup (`--doi`)
+  - Category filtering (`--category`)
+  - Pagination iterator for large result sets
+  - `BIORXIV_CATEGORIES` constant (27 categories)
+  - `MEDRXIV_CATEGORIES` constant (52 categories)
+  - `fetch_biorxiv()` and `fetch_medrxiv()` orchestrator functions
+
+### Tests
+- Added 21 new tests for bioRxiv client (`test_biorxiv.py`)
+- Total test count: 252 (all passing)
+
 ## [0.1.2] - 2026-01-21
 
 ### Added
