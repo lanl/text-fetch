@@ -58,9 +58,9 @@ def pdf(ctx: click.Context) -> None:
 )
 @click.option(
     "--xslt-path",
-    default="tei2jats.xsl",
+    default=None,
     type=click.Path(exists=True),
-    help="Path to TEI→JATS XSLT stylesheet",
+    help="Path to TEI→JATS XSLT stylesheet (default: bundled)",
 )
 @click.option(
     "--prefer-fulltext/--header-only",
@@ -106,7 +106,7 @@ def pdf_batch(
     pdf_dir: str,
     output_dir: str,
     grobid_url: str | None,
-    xslt_path: str,
+    xslt_path: str | None,
     prefer_fulltext: bool,
     save_tei: bool,
     resolve_ncbi: bool,
@@ -120,7 +120,11 @@ def pdf_batch(
     import csv
     from pathlib import Path
 
+    from text_fetch.grobid import get_default_xslt_path
     from text_fetch.pdf import find_pdfs, process_pdf_batch
+
+    # Resolve XSLT path
+    resolved_xslt = Path(xslt_path) if xslt_path else get_default_xslt_path()
 
     config = ctx.obj["config"]
 
@@ -155,7 +159,7 @@ def pdf_batch(
         pdf_dir=Path(pdf_dir),
         output_dir=Path(output_dir),
         grobid_url=grobid,
-        xslt_path=Path(xslt_path),
+        xslt_path=resolved_xslt,
         prefer_fulltext=prefer_fulltext,
         save_tei=save_tei,
         resolve_ncbi=resolve_ncbi,

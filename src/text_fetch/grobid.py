@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-__all__ = ["GROBIDClient"]
+__all__ = ["GROBIDClient", "get_default_xslt_path"]
 
 import logging
+from importlib.resources import files
 from pathlib import Path
 
 import requests
@@ -13,6 +14,15 @@ from lxml import etree
 from .common import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+def get_default_xslt_path() -> Path:
+    """Get path to bundled tei2jats.xsl stylesheet.
+
+    Returns:
+        Path to the XSLT file bundled with the package.
+    """
+    return Path(str(files("text_fetch.data").joinpath("tei2jats.xsl")))
 
 
 class GROBIDClient:

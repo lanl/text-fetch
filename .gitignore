@@ -15,9 +15,11 @@ venv/
 # PDFs
 Manuscripts/*.pdf
 
-# XML files
-jats_cache/*.xml 
-tei_cache/*.xml 
+# Output artifacts
+jats_cache/
+tei_cache/
+*.tar.gz
+pdf_metadata.csv
 
 # Configuration (contains secrets)
 text-fetch.toml
