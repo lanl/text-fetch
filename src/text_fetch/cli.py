@@ -6,15 +6,69 @@ This module is a thin dispatcher. Business logic lives in text_fetch/*.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import click
 
 from . import __version__
+from .common import build_provenance, create_jats_tarball, embed_provenance
 from .config import (
     get_grobid_url,
     get_ncbi_api_key,
     get_ncbi_email,
     load_config,
 )
+
+
+def _handle_tarball_creation(
+    output_dir: str,
+    tarball: bool,
+    tarball_name: str | None,
+    stats: dict[str, Any],
+    search_config_dict: dict[str, Any] | None,
+    command: str,
+    source: str,
+    verbose: bool = False,
+) -> None:
+    """Handle tarball creation after a fetch completes.
+
+    Args:
+        output_dir: Output directory path.
+        tarball: Whether to create tarball.
+        tarball_name: Custom tarball name or None for default.
+        stats: Fetch statistics dict.
+        search_config_dict: Search config as dict (for embedding).
+        command: Original command line.
+        source: Source name (pmc, europepmc, etc).
+        verbose: Whether to show verbose output.
+    """
+    if not tarball:
+        return
+
+    out_path = Path(output_dir)
+    default_name = f"{source}_corpus.tar.gz" if source else "corpus.tar.gz"
+    tarball_path = out_path / (tarball_name or default_name)
+
+    if verbose:
+        click.echo(f"Creating tarball: {tarball_path}")
+
+    try:
+        tarball_stats = create_jats_tarball(out_path, tarball_path)
+
+        # Build and embed provenance
+        provenance = build_provenance(
+            stats=tarball_stats,
+            command=command,
+            sources_queried=[source] if source else None,
+        )
+        embed_provenance(tarball_path, search_config_dict, provenance)
+
+        click.echo(f"Created tarball: {tarball_path}")
+        click.echo(f"  Files included: {tarball_stats['files_included']}")
+        click.echo(f"  Size: {tarball_stats['bytes']:,} bytes")
+    except Exception as e:
+        click.echo(f"Warning: Failed to create tarball: {e}", err=True)
 
 
 @click.group()
@@ -99,6 +153,8 @@ def pdf(ctx: click.Context) -> None:
     is_flag=True,
     help="Convert Unicode characters to ASCII",
 )
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def pdf_batch(
@@ -114,6 +170,8 @@ def pdf_batch(
     api_key: str | None,
     csv_path: str | None,
     normalize_unicode: bool,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Process PDF files in a directory via GROBID."""
@@ -205,6 +263,19 @@ def pdf_batch(
                 writer.writerow(row)
         click.echo(f"Wrote metadata to {csv_path}")
 
+    # Create tarball if requested
+    cmd = f"text-fetch pdf batch --dir {pdf_dir} --out {output_dir}"
+    _handle_tarball_creation(
+        output_dir=output_dir,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=result,
+        search_config_dict=None,
+        command=cmd,
+        source="pdf",
+        verbose=verbose,
+    )
+
 
 @cli.group()
 @click.pass_context
@@ -229,6 +300,8 @@ def pmc(ctx: click.Context) -> None:
     envvar="NCBI_API_KEY",
     help="NCBI API key (optional, for higher rate limits)",
 )
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def pmc_fetch(
@@ -238,6 +311,8 @@ def pmc_fetch(
     out: str,
     email: str | None,
     api_key: str | None,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch articles from PubMed Central via E-utilities.
@@ -340,6 +415,20 @@ def pmc_fetch(
     click.echo(f"  Errors: {stats['errors']:,}")
     click.echo(f"\nOutput: {out}/")
     click.echo(f"Manifest: {out}/manifest.json")
+
+    # Create tarball if requested
+    search_config_dict = search_config.to_dict() if search_config else None
+    cmd = f"text-fetch pmc fetch --query '{query or pubmed_query}' --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=search_config_dict,
+        command=cmd,
+        source="pmc",
+        verbose=verbose,
+    )
 
 
 @pmc.command(name="sync")
@@ -510,6 +599,8 @@ def arxiv(ctx: click.Context) -> None:
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
 @click.option("--grobid-url", help="GROBID service URL")
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def arxiv_fetch(
@@ -520,6 +611,8 @@ def arxiv_fetch(
     max_results: int,
     out: str,
     grobid_url: str | None,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch preprints from arXiv.
@@ -612,6 +705,20 @@ def arxiv_fetch(
     click.echo(f"  Errors: {stats['errors']:,}")
     click.echo(f"\nOutput: {out}/")
 
+    # Create tarball if requested
+    search_config_dict = search_config.to_dict() if search_config else None
+    cmd = f"text-fetch arxiv fetch --query '{query or arxiv_query}' --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=search_config_dict,
+        command=cmd,
+        source="arxiv",
+        verbose=verbose,
+    )
+
 
 @cli.group()
 @click.pass_context
@@ -629,6 +736,8 @@ def biorxiv(ctx: click.Context) -> None:
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
 @click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def biorxiv_fetch(
@@ -641,6 +750,8 @@ def biorxiv_fetch(
     max_results: int,
     out: str,
     grobid_url: str | None,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch preprints from bioRxiv.
@@ -712,6 +823,19 @@ def biorxiv_fetch(
     click.echo(f"  Errors: {stats['errors']:,}")
     click.echo(f"\nOutput: {out}/")
 
+    # Create tarball if requested
+    cmd = f"text-fetch biorxiv fetch --days {days or ''} --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=None,
+        command=cmd,
+        source="biorxiv",
+        verbose=verbose,
+    )
+
 
 @cli.group()
 @click.pass_context
@@ -729,6 +853,8 @@ def medrxiv(ctx: click.Context) -> None:
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
 @click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def medrxiv_fetch(
@@ -741,6 +867,8 @@ def medrxiv_fetch(
     max_results: int,
     out: str,
     grobid_url: str | None,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch preprints from medRxiv.
@@ -809,6 +937,19 @@ def medrxiv_fetch(
     click.echo(f"  Errors: {stats['errors']:,}")
     click.echo(f"\nOutput: {out}/")
 
+    # Create tarball if requested
+    cmd = f"text-fetch medrxiv fetch --days {days or ''} --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=None,
+        command=cmd,
+        source="medrxiv",
+        verbose=verbose,
+    )
+
 
 @cli.group()
 @click.pass_context
@@ -830,6 +971,8 @@ def chemrxiv(ctx: click.Context) -> None:
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
 @click.option("--grobid-url", help="GROBID service URL (required)")
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def chemrxiv_fetch(
@@ -842,6 +985,8 @@ def chemrxiv_fetch(
     max_results: int,
     out: str,
     grobid_url: str | None,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch preprints from ChemRxiv.
@@ -921,6 +1066,19 @@ def chemrxiv_fetch(
     click.echo(f"  Errors: {stats['errors']:,}")
     click.echo(f"\nOutput: {out}/")
 
+    # Create tarball if requested
+    cmd = f"text-fetch chemrxiv fetch --term '{term or ''}' --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=None,
+        command=cmd,
+        source="chemrxiv",
+        verbose=verbose,
+    )
+
 
 @cli.group()
 @click.pass_context
@@ -939,6 +1097,8 @@ def europepmc(ctx: click.Context) -> None:
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--include-non-oa", is_flag=True, help="Include non-open-access")
 @click.option("--out", required=True, help="Output directory")
+@click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def europepmc_fetch(
@@ -952,6 +1112,8 @@ def europepmc_fetch(
     max_results: int,
     include_non_oa: bool,
     out: str,
+    tarball: bool,
+    tarball_name: str | None,
     verbose: bool,
 ) -> None:
     """Fetch articles from Europe PMC.
@@ -1025,6 +1187,19 @@ def europepmc_fetch(
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
     click.echo(f"\nOutput: {out}/")
+
+    # Create tarball if requested
+    cmd = f"text-fetch europepmc fetch --author '{author or ''}' --out {out}"
+    _handle_tarball_creation(
+        output_dir=out,
+        tarball=tarball,
+        tarball_name=tarball_name,
+        stats=stats,
+        search_config_dict=None,
+        command=cmd,
+        source="europepmc",
+        verbose=verbose,
+    )
 
 
 @cli.command(name="fetch")
