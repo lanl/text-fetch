@@ -1,6 +1,6 @@
 """text-fetch: Acquire scientific literature for RAG pipelines."""
 
-__version__ = "0.1.6"
+__version__ = "0.1.9"
 
 from .biorxiv import (
     BIORXIV_CATEGORIES,
@@ -17,6 +17,12 @@ from .chemrxiv import (
     fetch_chemrxiv,
     get_category_id,
     get_category_ids,
+)
+from .common import (
+    build_provenance,
+    create_jats_tarball,
+    embed_provenance,
+    read_tarball_provenance,
 )
 from .europepmc import (
     EuropePMCArticle,
@@ -53,12 +59,14 @@ __all__ = [
     "EuropePMCClient",
     "GROBIDClient",
     "MEDRXIV_CATEGORIES",
-    "get_default_xslt_path",
     "PDFProcessingResult",
     "SearchConfig",
     "SearchConfigError",
     "SourceOptions",
+    "build_provenance",
+    "create_jats_tarball",
     "deduplicate_by_doi",
+    "embed_provenance",
     "fetch_biorxiv",
     "fetch_chemrxiv",
     "fetch_europepmc",
@@ -66,7 +74,9 @@ __all__ = [
     "find_pdfs",
     "get_category_id",
     "get_category_ids",
+    "get_default_xslt_path",
     "process_pdf",
     "process_pdf_batch",
+    "read_tarball_provenance",
     "unified_fetch",
 ]

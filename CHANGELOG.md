@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-01-22
+
+### Added
+- **Tarball Output for litkit** - Create tarballs directly usable by litkit RAG pipeline
+  - `--tarball` flag on all fetch commands (pmc, europepmc, biorxiv, medrxiv, arxiv, chemrxiv)
+  - `--tarball-name` option for custom output filename (default: `{source}_corpus.tar.gz`)
+  - `--tarball` flag on `text-fetch fetch` unified command
+  - `--tarball` flag on `pdf batch` command
+  - `create_jats_tarball()` function for creating tarballs from output directories
+  - `embed_provenance()` function for embedding provenance data in tarballs
+  - `read_tarball_provenance()` function for reading embedded provenance
+  - `build_provenance()` helper for constructing provenance metadata
+  - Tarballs include `.text-fetch/` directory with:
+    - `provenance.json` - fetch metadata (version, timestamp, command, statistics)
+    - `search_config.json` - original search configuration (when available)
+
+### Key Features
+- **litkit Compatibility** - Tarballs ready for direct use with litkit RAG pipeline
+- **Provenance Tracking** - Full reproducibility with embedded search configs
+- **Flexible Compression** - Supports gzip (.tar.gz), bzip2 (.tar.bz2), or uncompressed (.tar)
+
+### Tests
+- Added 21 new tests for tarball functions (`test_tarball.py`)
+- Tests for `create_jats_tarball()`, `embed_provenance()`, `read_tarball_provenance()`, `build_provenance()`
+
 ## [0.1.6] - 2026-01-21
 
 ### Added
