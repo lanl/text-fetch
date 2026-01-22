@@ -9,6 +9,7 @@ __all__ = [
 
 import logging
 from collections.abc import Callable
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -279,11 +280,11 @@ def _write_unified_manifest(
 ) -> None:
     """Write unified manifest.json."""
     import json
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     manifest = {
         "version": "1.0",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "config": config.to_dict(),
         "statistics": {
             "sources": stats["sources"],

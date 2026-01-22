@@ -20,7 +20,7 @@ import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -318,7 +318,7 @@ def write_manifest(
 
     manifest_data = {
         "version": "1.0",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(UTC).isoformat(),
         "statistics": {
             "total": len(entries),
             "valid": valid_count,
@@ -420,7 +420,7 @@ def save_pmc_article(
         has_abstract=result.has_abstract,
         has_body=result.has_body,
         body_chars=result.body_chars,
-        saved_at=datetime.now(timezone.utc).isoformat(),
+        saved_at=datetime.now(UTC).isoformat(),
         sha256=content_hash,
     )
 

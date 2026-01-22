@@ -41,7 +41,6 @@ import sys
 import tarfile
 import time
 import unicodedata
-from typing import Optional
 
 import requests
 from lxml import etree as ET
@@ -249,7 +248,7 @@ def sha1_of_file(path: str) -> str:
     return h.hexdigest()
 
 
-def extract_doi_with_pdfminer(path: str, max_pages: int = 3) -> Optional[str]:
+def extract_doi_with_pdfminer(path: str, max_pages: int = 3) -> str | None:
     if not _HAS_PDFMINER:
         return None
     try:
@@ -285,7 +284,7 @@ class RateLimiter:
 
 def grobid_process(
     pdf_path: str, url: str, prefer_fulltext: bool, ocr: bool, timeout: int = 60
-) -> tuple[Optional[str], str]:
+) -> tuple[str | None, str]:
     """
     Call GROBID. Return (tei_xml, source_label). source_label in
     {'grobid-fulltext','grobid-header'} if successful, else (None,'').
@@ -322,7 +321,7 @@ def grobid_process(
 
 
 def ncbi_idconv_from_doi(
-    doi: str, email: str, limiter: Optional[RateLimiter]
+    doi: str, email: str, limiter: RateLimiter | None
 ) -> tuple[str, str, str]:
     """Return (doi, pmid, pmcid). Keeps doi unchanged if NCBI normalizes differently."""
     if not doi:

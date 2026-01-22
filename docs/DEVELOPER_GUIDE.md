@@ -6,7 +6,7 @@ This guide covers development setup, code conventions, and contribution workflow
 
 ### Prerequisites
 
-- Python 3.9+ (3.12+ recommended)
+- Python 3.12+
 - [uv](https://github.com/astral-sh/uv) package manager
 - Docker (for GROBID)
 - Git

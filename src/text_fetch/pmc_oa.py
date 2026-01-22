@@ -20,11 +20,11 @@ import hashlib
 import io
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import requests
 
@@ -58,7 +58,7 @@ class PMCOAFileEntry:
             return None
         try:
             return datetime.strptime(self.last_updated, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=timezone.utc
+                tzinfo=UTC
             )
         except ValueError:
             return None
@@ -432,7 +432,7 @@ class PMCOAClient:
                 manifest.entries[entry.accession_id] = SyncManifestEntry(
                     filename=str(local_path.relative_to(self.storage_dir)),
                     accession_id=entry.accession_id,
-                    downloaded_at=datetime.now(timezone.utc).isoformat(),
+                    downloaded_at=datetime.now(UTC).isoformat(),
                     source_updated=entry.last_updated,
                     size_bytes=size,
                     sha256=sha256,
@@ -455,7 +455,7 @@ class PMCOAClient:
                 write_sync_manifest(self.storage_dir, manifest)
 
         # Final manifest update
-        manifest.last_sync = datetime.now(timezone.utc).isoformat()
+        manifest.last_sync = datetime.now(UTC).isoformat()
         manifest.subsets = self.subsets
         self._update_manifest_stats(manifest, stats)
         write_sync_manifest(self.storage_dir, manifest)

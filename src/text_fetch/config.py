@@ -25,15 +25,10 @@ __all__ = [
 
 import logging
 import os
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-# Use tomllib for Python 3.11+, otherwise tomli
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib
 
 logger = logging.getLogger(__name__)
 
