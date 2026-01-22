@@ -2,8 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
 
+import pytest
+from text_fetch.fetch import (
+    _fetch_from_source,
+    _wrap_callback,
+    _write_unified_manifest,
+    deduplicate_by_doi,
+    unified_fetch,
+)
 from text_fetch.query import SearchConfig, SourceOptions
 
 
@@ -195,8 +206,6 @@ class TestDeduplication:
 
     def test_deduplicate_removes_duplicates(self, tmp_path: Path) -> None:
         """Removes duplicate DOIs across sources."""
-        from text_fetch.fetch import deduplicate_by_doi
-
         # Create test structure
         pmc_dir = tmp_path / "pmc" / "valid"
         pmc_dir.mkdir(parents=True)
@@ -232,8 +241,6 @@ class TestDeduplication:
 
     def test_keeps_pmc_over_others(self, tmp_path: Path) -> None:
         """PMC articles take priority over others."""
-        from text_fetch.fetch import deduplicate_by_doi
-
         # Create test structure with same DOI
         pmc_dir = tmp_path / "pmc" / "valid"
         pmc_dir.mkdir(parents=True)
@@ -261,8 +268,6 @@ class TestDeduplication:
 
     def test_no_duplicates(self, tmp_path: Path) -> None:
         """Handles case with no duplicates."""
-        from text_fetch.fetch import deduplicate_by_doi
-
         pmc_dir = tmp_path / "pmc" / "valid"
         pmc_dir.mkdir(parents=True)
 
@@ -283,8 +288,6 @@ class TestDeduplication:
 
     def test_empty_directory(self, tmp_path: Path) -> None:
         """Handles empty directory."""
-        from text_fetch.fetch import deduplicate_by_doi
-
         result = deduplicate_by_doi(tmp_path)
 
         assert result["removed"] == 0
@@ -292,8 +295,6 @@ class TestDeduplication:
 
     def test_case_insensitive_doi(self, tmp_path: Path) -> None:
         """DOI comparison is case-insensitive."""
-        from text_fetch.fetch import deduplicate_by_doi
-
         pmc_dir = tmp_path / "pmc" / "valid"
         pmc_dir.mkdir(parents=True)
         europepmc_dir = tmp_path / "europepmc" / "valid"
@@ -324,15 +325,11 @@ class TestUnifiedFetchHelpers:
 
     def test_wrap_callback_none(self) -> None:
         """Returns None for None callback."""
-        from text_fetch.fetch import _wrap_callback
-
         result = _wrap_callback(None, "pmc")
         assert result is None
 
     def test_wrap_callback_adds_source(self) -> None:
         """Wrapped callback adds source parameter."""
-        from text_fetch.fetch import _wrap_callback
-
         calls: list[tuple[str, str, int, int]] = []
 
         def cb(source: str, article_id: str, current: int, total: int) -> None:
@@ -345,3 +342,420 @@ class TestUnifiedFetchHelpers:
 
         assert len(calls) == 1
         assert calls[0] == ("europepmc", "PMC123", 1, 10)
+
+
+class TestUnifiedFetch:
+    """Tests for unified_fetch orchestrator."""
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_fetches_from_single_source(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Fetches from single PMC source."""
+        mock_fetch_source.return_value = {
+            "fetched": 5,
+            "valid": 3,
+            "incomplete": 2,
+            "errors": 0,
+        }
+
+        config = SearchConfig(author="test", sources=["pmc"])
+
+        result = unified_fetch(
+            config,
+            output_dir=tmp_path,
+            email="test@example.com",
+        )
+
+        assert result["total_fetched"] == 5
+        assert result["per_source"]["pmc"]["valid"] == 3
+        mock_fetch_source.assert_called_once()
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_fetches_from_multiple_sources(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Fetches from multiple sources."""
+        mock_fetch_source.side_effect = [
+            {"fetched": 5, "valid": 3, "incomplete": 2, "errors": 0},
+            {"fetched": 10, "valid": 8, "incomplete": 2, "errors": 0},
+        ]
+
+        config = SearchConfig(
+            author="test",
+            sources=["pmc", "europepmc"],
+        )
+
+        result = unified_fetch(
+            config,
+            output_dir=tmp_path,
+            email="test@example.com",
+        )
+
+        assert result["total_fetched"] == 15
+        assert "pmc" in result["per_source"]
+        assert "europepmc" in result["per_source"]
+        assert mock_fetch_source.call_count == 2
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_handles_source_error(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Continues after source failure."""
+        mock_fetch_source.side_effect = [
+            Exception("API error"),
+            {"fetched": 10, "valid": 8, "incomplete": 2, "errors": 0},
+        ]
+
+        config = SearchConfig(
+            author="test",
+            sources=["pmc", "europepmc"],
+        )
+
+        result = unified_fetch(
+            config,
+            output_dir=tmp_path,
+            email="test@example.com",
+        )
+
+        assert result["total_errors"] >= 1
+        assert "error" in result["per_source"]["pmc"]
+        assert result["per_source"]["europepmc"]["valid"] == 8
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch.deduplicate_by_doi")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_deduplication_runs(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_dedup: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Deduplication is called when enabled."""
+        mock_fetch_source.return_value = {
+            "fetched": 5,
+            "valid": 5,
+            "incomplete": 0,
+            "errors": 0,
+        }
+        mock_dedup.return_value = {"removed": 1, "unique_dois": ["10.1234/test"]}
+
+        config = SearchConfig(
+            author="test",
+            sources=["pmc"],
+            deduplicate_by_doi=True,
+        )
+
+        result = unified_fetch(config, output_dir=tmp_path, email="test@example.com")
+
+        mock_dedup.assert_called_once_with(tmp_path)
+        assert result["duplicates_removed"] == 1
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch.deduplicate_by_doi")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_skips_deduplication_when_disabled(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_dedup: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Skips deduplication when disabled."""
+        mock_fetch_source.return_value = {
+            "fetched": 5,
+            "valid": 5,
+            "incomplete": 0,
+            "errors": 0,
+        }
+
+        config = SearchConfig(
+            author="test",
+            sources=["pmc"],
+            deduplicate_by_doi=False,
+        )
+
+        unified_fetch(config, output_dir=tmp_path, email="test@example.com")
+
+        mock_dedup.assert_not_called()
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_uses_default_pmc_source(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Defaults to PMC if no sources specified."""
+        mock_fetch_source.return_value = {
+            "fetched": 5,
+            "valid": 5,
+            "incomplete": 0,
+            "errors": 0,
+        }
+
+        config = SearchConfig(author="test", sources=[])
+
+        result = unified_fetch(config, output_dir=tmp_path, email="test@example.com")
+
+        assert result["sources"] == ["pmc"]
+
+    @patch("text_fetch.fetch._fetch_from_source")
+    @patch("text_fetch.fetch._write_unified_manifest")
+    def test_creates_output_directory(
+        self,
+        mock_write_manifest: MagicMock,
+        mock_fetch_source: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Creates output directory if it doesn't exist."""
+        mock_fetch_source.return_value = {
+            "fetched": 0,
+            "valid": 0,
+            "incomplete": 0,
+            "errors": 0,
+        }
+
+        config = SearchConfig(author="test", sources=["pmc"])
+        output_dir = tmp_path / "new_dir" / "nested"
+
+        unified_fetch(config, output_dir=output_dir, email="test@example.com")
+
+        assert output_dir.exists()
+
+
+class TestFetchFromSource:
+    """Tests for _fetch_from_source dispatch."""
+
+    @patch("text_fetch.pmc.fetch_pmc")
+    def test_dispatches_to_pmc(self, mock_fetch: MagicMock, tmp_path: Path) -> None:
+        """Routes to fetch_pmc for 'pmc' source."""
+        mock_fetch.return_value = {"fetched": 5}
+
+        config = SearchConfig(author="test")
+        _fetch_from_source(
+            "pmc",
+            config,
+            tmp_path,
+            email="test@example.com",
+            api_key=None,
+            grobid_url=None,
+            verbose=False,
+            progress_callback=None,
+        )
+
+        mock_fetch.assert_called_once()
+
+    @patch("text_fetch.europepmc.fetch_europepmc")
+    def test_dispatches_to_europepmc(
+        self, mock_fetch: MagicMock, tmp_path: Path
+    ) -> None:
+        """Routes to fetch_europepmc for 'europepmc' source."""
+        mock_fetch.return_value = {"fetched": 10}
+
+        config = SearchConfig(author="test")
+        _fetch_from_source(
+            "europepmc",
+            config,
+            tmp_path,
+            email=None,
+            api_key=None,
+            grobid_url=None,
+            verbose=False,
+            progress_callback=None,
+        )
+
+        mock_fetch.assert_called_once()
+
+    @patch("text_fetch.biorxiv.fetch_biorxiv")
+    def test_dispatches_to_biorxiv(self, mock_fetch: MagicMock, tmp_path: Path) -> None:
+        """Routes to fetch_biorxiv for 'biorxiv' source."""
+        mock_fetch.return_value = {"fetched": 5}
+
+        config = SearchConfig(author="test")
+        _fetch_from_source(
+            "biorxiv",
+            config,
+            tmp_path,
+            email=None,
+            api_key=None,
+            grobid_url=None,
+            verbose=False,
+            progress_callback=None,
+        )
+
+        mock_fetch.assert_called_once()
+
+    @patch("text_fetch.biorxiv.fetch_medrxiv")
+    def test_dispatches_to_medrxiv(self, mock_fetch: MagicMock, tmp_path: Path) -> None:
+        """Routes to fetch_medrxiv for 'medrxiv' source."""
+        mock_fetch.return_value = {"fetched": 5}
+
+        config = SearchConfig(author="test")
+        _fetch_from_source(
+            "medrxiv",
+            config,
+            tmp_path,
+            email=None,
+            api_key=None,
+            grobid_url=None,
+            verbose=False,
+            progress_callback=None,
+        )
+
+        mock_fetch.assert_called_once()
+
+    @patch("text_fetch.arxiv.fetch_arxiv")
+    def test_dispatches_to_arxiv(self, mock_fetch: MagicMock, tmp_path: Path) -> None:
+        """Routes to fetch_arxiv for 'arxiv' source."""
+        mock_fetch.return_value = {"fetched": 5}
+
+        config = SearchConfig(author="test")
+        _fetch_from_source(
+            "arxiv",
+            config,
+            tmp_path,
+            email=None,
+            api_key=None,
+            grobid_url="http://localhost:8070",
+            verbose=False,
+            progress_callback=None,
+        )
+
+        mock_fetch.assert_called_once()
+
+    def test_arxiv_requires_grobid(self, tmp_path: Path) -> None:
+        """arXiv source requires GROBID URL."""
+        config = SearchConfig(author="test")
+
+        with pytest.raises(ValueError, match="GROBID"):
+            _fetch_from_source(
+                "arxiv",
+                config,
+                tmp_path,
+                email=None,
+                api_key=None,
+                grobid_url=None,
+                verbose=False,
+                progress_callback=None,
+            )
+
+    @patch("text_fetch.chemrxiv.fetch_chemrxiv")
+    def test_dispatches_to_chemrxiv(
+        self, mock_fetch: MagicMock, tmp_path: Path
+    ) -> None:
+        """Routes to fetch_chemrxiv for 'chemrxiv' source."""
+        mock_fetch.return_value = {"fetched": 5}
+
+        config = SearchConfig(author="test")
+        _fetch_from_source(
+            "chemrxiv",
+            config,
+            tmp_path,
+            email=None,
+            api_key=None,
+            grobid_url="http://localhost:8070",
+            verbose=False,
+            progress_callback=None,
+        )
+
+        mock_fetch.assert_called_once()
+
+    def test_chemrxiv_requires_grobid(self, tmp_path: Path) -> None:
+        """ChemRxiv source requires GROBID URL."""
+        config = SearchConfig(author="test")
+
+        with pytest.raises(ValueError, match="GROBID"):
+            _fetch_from_source(
+                "chemrxiv",
+                config,
+                tmp_path,
+                email=None,
+                api_key=None,
+                grobid_url=None,
+                verbose=False,
+                progress_callback=None,
+            )
+
+    def test_raises_for_unknown_source(self, tmp_path: Path) -> None:
+        """Raises ValueError for unknown source."""
+        config = SearchConfig(author="test")
+
+        with pytest.raises(ValueError, match="Unknown source"):
+            _fetch_from_source(
+                "unknown",
+                config,
+                tmp_path,
+                email=None,
+                api_key=None,
+                grobid_url=None,
+                verbose=False,
+                progress_callback=None,
+            )
+
+
+class TestWriteUnifiedManifest:
+    """Tests for _write_unified_manifest."""
+
+    def test_writes_manifest(self, tmp_path: Path) -> None:
+        """Writes manifest.json with correct structure."""
+        stats: dict[str, Any] = {
+            "sources": ["pmc"],
+            "per_source": {"pmc": {"fetched": 5, "valid": 5}},
+            "total_fetched": 5,
+            "total_valid": 5,
+            "total_incomplete": 0,
+            "total_errors": 0,
+            "duplicates_removed": 0,
+            "unique_dois": [],
+        }
+        config = SearchConfig(author="test", sources=["pmc"])
+
+        _write_unified_manifest(tmp_path, stats, config)
+
+        manifest_path = tmp_path / "manifest.json"
+        assert manifest_path.exists()
+
+        manifest = json.loads(manifest_path.read_text())
+        assert manifest["version"] == "1.0"
+        assert "created_at" in manifest
+        assert manifest["statistics"]["total_fetched"] == 5
+        assert "config" in manifest
+
+    def test_manifest_includes_per_source_stats(self, tmp_path: Path) -> None:
+        """Manifest includes per-source statistics."""
+        stats: dict[str, Any] = {
+            "sources": ["pmc", "europepmc"],
+            "per_source": {
+                "pmc": {"fetched": 5, "valid": 5},
+                "europepmc": {"fetched": 10, "valid": 8},
+            },
+            "total_fetched": 15,
+            "total_valid": 13,
+            "total_incomplete": 0,
+            "total_errors": 0,
+            "duplicates_removed": 2,
+            "unique_dois": [],
+        }
+        config = SearchConfig(author="test", sources=["pmc", "europepmc"])
+
+        _write_unified_manifest(tmp_path, stats, config)
+
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        assert "pmc" in manifest["per_source"]
+        assert "europepmc" in manifest["per_source"]
+        assert manifest["statistics"]["duplicates_removed"] == 2
