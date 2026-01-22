@@ -28,6 +28,12 @@ from .fetch import (
     unified_fetch,
 )
 from .grobid import GROBIDClient
+from .pdf import (
+    PDFProcessingResult,
+    find_pdfs,
+    process_pdf,
+    process_pdf_batch,
+)
 from .query import (
     ALL_SOURCES,
     SearchConfig,
@@ -47,6 +53,7 @@ __all__ = [
     "EuropePMCClient",
     "GROBIDClient",
     "MEDRXIV_CATEGORIES",
+    "PDFProcessingResult",
     "SearchConfig",
     "SearchConfigError",
     "SourceOptions",
@@ -55,7 +62,10 @@ __all__ = [
     "fetch_chemrxiv",
     "fetch_europepmc",
     "fetch_medrxiv",
+    "find_pdfs",
     "get_category_id",
     "get_category_ids",
+    "process_pdf",
+    "process_pdf_batch",
     "unified_fetch",
 ]

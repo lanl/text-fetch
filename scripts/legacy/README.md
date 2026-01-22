@@ -21,6 +21,29 @@ Original script for PubMed/PMC access using Biopython Entrez. Features included:
 - JSON config-driven searches
 - Unified CLI interface
 
+## pdf_to_jats.py
+
+**Status:** Archived (v0.1.8)  
+**Replaced by:** `text-fetch pdf batch`
+
+Original standalone script for PDF→JATS conversion via GROBID. Features included:
+- Recursive PDF directory scanning
+- GROBID processing (fulltext or header mode)
+- TEI → JATS conversion via XSLT
+- TEI caching with SHA1-based filenames
+- CSV metadata output
+- NCBI ID resolution (DOI → PMID/PMCID)
+- Tarball creation
+
+**Migration:**
+```bash
+# Old command
+python pdf_to_jats.py --pdf-root ./Manuscripts --out metadata.csv
+
+# New command
+text-fetch pdf batch --dir ./Manuscripts --out ./output --csv metadata.csv
+```
+
 ## ebola.json
 
 Example search configuration used with `pubmed_access.py`. The text-fetch JSON format differs slightly.
