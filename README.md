@@ -316,6 +316,128 @@ uv run text-fetch pmc fetch --query "perelson as[author]" --out ./perelson
 uv run text-fetch pmc sync --storage ./pmc-test --subset oa_comm --max-files 5 -y
 ```
 
+## Workflows
+
+### Workflow 1: Author Corpus
+
+Build a comprehensive corpus of publications by a specific author.
+
+```bash
+# Create search config
+cat > input/hlavacek.json << 'EOF'
+{
+  "name": "hlavacek_corpus",
+  "author": "hlavacek ws",
+  "sources": ["pmc", "europepmc", "biorxiv"],
+  "max_results_per_source": 100,
+  "deduplicate_by_doi": true
+}
+EOF
+
+# Run unified fetch
+text-fetch fetch \
+  --config-file input/hlavacek.json \
+  --email your.email@example.com \
+  --out ./output/hlavacek
+
+# Results structure
+ls -la output/hlavacek/
+# pmc/
+#   valid/
+#   incomplete/
+# europepmc/
+#   valid/
+#   incomplete/
+# biorxiv/
+#   valid/
+#   incomplete/
+# manifest.json
+# duplicates.json (if duplicates found)
+```
+
+### Workflow 2: Preprint-Only Corpus
+
+Build a corpus from preprint servers only (no peer-reviewed journals).
+
+```bash
+# Create preprint-focused config
+cat > input/preprints.json << 'EOF'
+{
+  "name": "preprint_corpus",
+  "keywords": ["systems biology", "rule-based modeling"],
+  "sources": ["biorxiv", "medrxiv", "arxiv"],
+  "source_options": {
+    "arxiv": {"categories": ["q-bio.MN", "q-bio.QM"]},
+    "biorxiv": {"categories": ["systems_biology", "bioinformatics"]}
+  },
+  "max_results_per_source": 50
+}
+EOF
+
+# Start GROBID for arXiv PDFs
+./scripts/start_grobid.sh
+
+# Fetch preprints
+text-fetch fetch \
+  --config-file input/preprints.json \
+  --grobid-url http://localhost:8070 \
+  --out ./output/preprints
+```
+
+### Workflow 3: Date-Limited Search
+
+Search for recent publications within a specific time window.
+
+```bash
+# Create date-limited config
+cat > input/recent.json << 'EOF'
+{
+  "author": "perelson as",
+  "date_range": {
+    "start": "2024/01/01",
+    "end": "2025/01/01"
+  },
+  "sources": ["pmc", "europepmc"],
+  "max_results_per_source": 200
+}
+EOF
+
+# Fetch recent articles
+text-fetch fetch \
+  --config-file input/recent.json \
+  --email your.email@example.com \
+  --out ./output/recent
+
+# Check stats
+cat output/recent/manifest.json | jq '.statistics'
+```
+
+### Workflow 4: PDF Directory Processing
+
+Process a local directory of PDFs (e.g., downloaded papers, grants).
+
+```bash
+# Start GROBID
+./scripts/start_grobid.sh
+
+# Process PDF directory
+text-fetch pdf batch \
+  --dir ./Manuscripts \
+  --out ./output/pdfs \
+  --csv metadata.csv \
+  --resolve-ncbi \
+  --email your.email@example.com \
+  --verbose
+
+# Results
+ls output/pdfs/
+# valid/           - Complete JATS
+# incomplete/      - Missing title/abstract/body
+# tei_cache/       - Cached TEI from GROBID
+
+cat metadata.csv  # CSV with extracted metadata
+```
+
 ## Development
 
 ```bash
@@ -331,10 +453,10 @@ uv run pre-commit run --all-files
 
 ## Documentation
 
+- [API_REFERENCE.md](docs/API_REFERENCE.md) - Python API documentation
 - [ROADMAP.md](docs/ROADMAP.md) - Development roadmap and feature status
 - [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) - Contributing guidelines
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture
-- [README_pdf_to_jats.md](docs/README_pdf_to_jats.md) - Legacy `pdf_to_jats.py` script documentation
 
 ## Related Projects
 
