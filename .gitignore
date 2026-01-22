@@ -23,7 +23,6 @@ tei_cache/*.xml
 text-fetch.toml
 
 # Project-specific
-input/
-pubmed_access.py
+/pubmed_access.py
 prompt.rtf
 .coverage
