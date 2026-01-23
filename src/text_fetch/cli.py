@@ -607,6 +607,11 @@ def arxiv(ctx: click.Context) -> None:
 )
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
+@click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
 @click.option("--grobid-url", help="GROBID service URL")
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
@@ -619,6 +624,7 @@ def arxiv_fetch(
     categories: tuple[str, ...],
     max_results: int,
     out: str,
+    workspace: str | None,
     grobid_url: str | None,
     tarball: bool,
     tarball_name: str | None,
@@ -638,11 +644,16 @@ def arxiv_fetch(
 
         # Using JSON config
         text-fetch arxiv fetch --config-file input/search.json --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch arxiv fetch --categories q-bio.MN --workspace ./my-corpus --out ./output
     """
     import logging
+    import sys
 
     from .arxiv import fetch_arxiv
     from .query import SearchConfig, SearchConfigError
+    from .workspace import Workspace
 
     if not config_file and not query and not categories:
         raise click.UsageError(
@@ -657,6 +668,14 @@ def arxiv_fetch(
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
         click.echo(f"GROBID URL: {resolved_grobid}")
+
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
 
     # Build search config
     search_config = None
@@ -692,6 +711,7 @@ def arxiv_fetch(
             config=search_config,
             query=query,
             output_dir=out,
+            workspace=ws,
             grobid_url=resolved_grobid,
             max_results=max_results,
             verbose=verbose,
@@ -703,6 +723,17 @@ def arxiv_fetch(
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
 
+    # Record search in workspace
+    if ws:
+        cmd = " ".join(sys.argv)
+        ws_search_config = {
+            "source": "arxiv",
+            "query": query,
+            "categories": list(categories) if categories else None,
+            "max_results": max_results,
+        }
+        ws.record_search(config=ws_search_config, command=cmd, stats=stats)
+
     # Summary
     click.echo("\n" + "=" * 50)
     click.echo("Fetch complete!")
@@ -711,22 +742,32 @@ def arxiv_fetch(
     click.echo(f"  Converted: {stats['converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("duplicates_skipped"):
+        click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
-    click.echo(f"\nOutput: {out}/")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
 
-    # Create tarball if requested
-    search_config_dict = search_config.to_dict() if search_config else None
-    cmd = f"text-fetch arxiv fetch --query '{query or arxiv_query}' --out {out}"
-    _handle_tarball_creation(
-        output_dir=out,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=stats,
-        search_config_dict=search_config_dict,
-        command=cmd,
-        source="arxiv",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        search_config_dict = search_config.to_dict() if search_config else None
+        cmd = f"text-fetch arxiv fetch --query '{query or arxiv_query}' --out {out}"
+        _handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict=search_config_dict,
+            command=cmd,
+            source="arxiv",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @cli.group()
