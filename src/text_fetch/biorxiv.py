@@ -170,9 +170,11 @@ class BiorxivClient:
         self.server = server
         self.limiter = RateLimiter(self.RATE_LIMIT)
         self.session = requests.Session()
+        from . import __version__
+
         self.session.headers.update(
             {
-                "User-Agent": "text-fetch/0.1.3 (scientific literature acquisition)",
+                "User-Agent": f"text-fetch/{__version__} (scientific literature acquisition)",
             }
         )
 
@@ -580,16 +582,11 @@ def _fetch_preprints(
     if not articles:
         return stats
 
-    # Resolve XSLT path for GROBID fallback
+    # Resolve XSLT path for GROBID fallback - use bundled package resource
     if xslt_path is None:
-        possible_paths = [
-            Path(__file__).parent.parent.parent / "tei2jats.xsl",
-            Path.cwd() / "tei2jats.xsl",
-        ]
-        for p in possible_paths:
-            if p.exists():
-                xslt_path = p
-                break
+        from .grobid import get_default_xslt_path
+
+        xslt_path = get_default_xslt_path()
 
     # Process articles
     validator = JATSValidator()

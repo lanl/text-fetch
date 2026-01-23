@@ -120,9 +120,11 @@ class ChemrxivClient:
         """Initialize client."""
         self.limiter = RateLimiter(self.RATE_LIMIT)
         self.session = requests.Session()
+        from . import __version__
+
         self.session.headers.update(
             {
-                "User-Agent": "text-fetch/0.1.4 (scientific literature acquisition)",
+                "User-Agent": f"text-fetch/{__version__} (scientific literature acquisition)",
                 "Accept": "application/json",
             }
         )
@@ -488,19 +490,11 @@ def fetch_chemrxiv(
     if not articles:
         return stats
 
-    # Resolve XSLT path
+    # Resolve XSLT path - use bundled package resource
     if xslt_path is None:
-        possible_paths = [
-            Path(__file__).parent.parent.parent / "tei2jats.xsl",
-            Path.cwd() / "tei2jats.xsl",
-        ]
-        for p in possible_paths:
-            if p.exists():
-                xslt_path = p
-                break
-        if xslt_path is None:
-            msg = "tei2jats.xsl not found. Please provide xslt_path."
-            raise ValueError(msg)
+        from .grobid import get_default_xslt_path
+
+        xslt_path = get_default_xslt_path()
 
     # Initialize GROBID
     grobid_client = GROBIDClient(url=grobid_url)

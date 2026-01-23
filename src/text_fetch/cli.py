@@ -1651,7 +1651,7 @@ def unified_fetch_cmd(
 
     # Override sources if specified
     if sources:
-        search_config.sources = sources.split(",")
+        search_config.sources = [s.strip() for s in sources.split(",")]
 
     # Override deduplication (when using workspace, deduplication is automatic)
     if no_dedupe and not ws:

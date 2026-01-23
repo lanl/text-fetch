@@ -8,7 +8,7 @@ text-fetch provides a unified interface for acquiring full-text scientific liter
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.12+
 - [uv](https://github.com/astral-sh/uv) package manager (recommended)
 - Docker (for GROBID-based PDF processing)
 

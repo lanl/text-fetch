@@ -223,10 +223,20 @@ class ArxivClient:
             updated = datetime.fromisoformat(updated_elem.text.replace("Z", "+00:00"))
 
         # DOI (if available)
+        # Check arxiv:doi element first (most reliable)
         doi = None
-        for link in entry.findall("atom:link", ns):
-            if link.get("title") == "doi":
-                doi = link.get("href", "").replace("http://dx.doi.org/", "")
+        doi_elem = entry.find("arxiv:doi", ns)
+        if doi_elem is not None and doi_elem.text:
+            doi = doi_elem.text.strip()
+        # Fall back to link with title="doi"
+        if not doi:
+            for link in entry.findall("atom:link", ns):
+                if link.get("title") == "doi":
+                    href = link.get("href", "")
+                    doi = href.replace("http://dx.doi.org/", "").replace(
+                        "https://doi.org/", ""
+                    )
+                    break
 
         # PDF URL
         pdf_url = self.PDF_URL_TEMPLATE.format(arxiv_id=arxiv_id.split("v")[0])
@@ -323,19 +333,11 @@ def fetch_arxiv(
         output_path.mkdir(parents=True, exist_ok=True)
         search_id = None
 
-    # Default XSLT path - look in package root
+    # Default XSLT path - use bundled package resource
     if xslt_path is None:
-        # Try common locations
-        possible_paths = [
-            Path(__file__).parent.parent.parent / "tei2jats.xsl",
-            Path.cwd() / "tei2jats.xsl",
-        ]
-        for p in possible_paths:
-            if p.exists():
-                xslt_path = p
-                break
-        if xslt_path is None:
-            raise ValueError("tei2jats.xsl not found. Please provide xslt_path.")
+        from .grobid import get_default_xslt_path
+
+        xslt_path = get_default_xslt_path()
 
     # Initialize stats
     stats: dict[str, Any] = {

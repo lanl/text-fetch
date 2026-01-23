@@ -86,10 +86,12 @@ class EuropePMCClient:
         """Initialize client."""
         self.limiter = RateLimiter(self.RATE_LIMIT)
         self.session = requests.Session()
+        from . import __version__
+
         self.session.headers.update(
             {
-                "User-Agent": "text-fetch/0.1.5 (literature acquisition)",
-                "Accept": "application/json",
+                "User-Agent": f"text-fetch/{__version__} (scientific literature acquisition)",
+                "Accept": "application/json, application/xml",
             }
         )
 
