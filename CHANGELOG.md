@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-01-23
+
+### Added
+- **PMC OA Incremental Sync** - Maintain local PMC Open Access mirrors with easy updates
+  - `text-fetch pmc sync` now dry-run by default (shows what would be downloaded)
+  - `--download` flag to actually fetch files
+  - `--verify` flag to check local files match expected sizes
+  - `text-fetch pmc status` command to show local mirror statistics
+  - `text-fetch pmc import` command to register existing .tar.gz files
+  - `import_existing()` function for scanning and matching local files to PMC entries
+  - `verify_files()` method for file integrity checking
+  - `get_status()` method for mirror statistics
+
+### Changed
+- `pmc sync` is now dry-run by default - use `--download` to fetch files
+- Removed `--update` flag (sync is always incremental when manifest exists)
+
+### Tests
+- Added 9 new tests for PMC OA verify, status, and import functionality
+- Total test count: 473 (all passing)
+
+### Documentation
+- Updated README with PMC OA sync workflow documentation
+- Added `pmc status` and `pmc import` command examples
+- Added incremental update workflow guide
+
 ## [0.2.1] - 2026-01-22
 
 ### Added

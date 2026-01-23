@@ -71,23 +71,80 @@ text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output
 Download and maintain a local mirror of the PMC Open Access subset:
 
 ```bash
-# Initial sync (warning: full corpus is ~400GB)
+# Check for updates (dry-run, shows what would be downloaded)
 text-fetch pmc sync --storage /Volumes/External/pmc-oa
 
-# Incremental update (only new/modified articles)
-text-fetch pmc sync --storage /Volumes/External/pmc-oa --update
+# Download updates (actually fetches files)
+text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
 
 # Sync specific subset (oa_comm, oa_noncomm, oa_other)
-text-fetch pmc sync --storage ./pmc-oa --subset oa_comm
+text-fetch pmc sync --storage ./pmc-oa --subset oa_comm --download
+
+# Verify existing files match expected sizes
+text-fetch pmc sync --storage ./pmc-oa --verify
 
 # Test with limited files
-text-fetch pmc sync --storage ./test-pmc --max-files 10 -y
+text-fetch pmc sync --storage ./test-pmc --max-files 10 --download -y
+```
+
+#### Check PMC OA Mirror Status
+
+```bash
+# Show status of local mirror
+text-fetch pmc status --storage /Volumes/External/pmc-oa
+# PMC OA Local Mirror
+# ========================================
+# Storage: /Volumes/External/pmc-oa
+# Last sync: 2024-07-15 10:30:00
+#
+# Subsets:
+#   oa_comm: 1,234,567 files (180.5 GB)
+#   oa_noncomm: 890,123 files (95.2 GB)
+#   oa_other: 1,275,310 files (125.3 GB)
+#
+# Total: 3,400,000 files (401.0 GB)
+```
+
+#### Import Existing Downloads
+
+If you've manually downloaded PMC OA files, register them with the sync manifest:
+
+```bash
+# Import existing .tar.gz files into sync manifest
+text-fetch pmc import --storage /Volumes/External/pmc-oa
+# Scanning /Volumes/External/pmc-oa for .tar.gz files...
+# ==================================================
+# Import complete!
+#   Files scanned: 3,400,000
+#   Matched: 3,399,500
+#   Unmatched: 500
+#   Manifest: /Volumes/External/pmc-oa/sync_manifest.json
+
+# Import only specific subset
+text-fetch pmc import --storage ./pmc-oa --subset oa_comm
 ```
 
 **Subsets:**
 - `oa_comm` - Commercial use allowed (CC BY, CC0)
 - `oa_noncomm` - Non-commercial use only (CC BY-NC)
 - `oa_other` - Other open access licenses
+
+#### PMC OA Incremental Update Workflow
+
+```bash
+# 1. If you have existing downloads, import them first
+text-fetch pmc import --storage /Volumes/External/pmc-oa
+
+# 2. Check what's new (dry-run)
+text-fetch pmc sync --storage /Volumes/External/pmc-oa
+# Shows: 56,789 new files (~278 GB)
+
+# 3. Download updates
+text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
+
+# 4. Verify downloads (optional)
+text-fetch pmc sync --storage /Volumes/External/pmc-oa --verify
+```
 
 ### arXiv
 
