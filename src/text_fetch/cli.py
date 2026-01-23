@@ -1085,6 +1085,16 @@ def biorxiv(ctx: click.Context) -> None:
     help="Add results to workspace (enables cross-search deduplication)",
 )
 @click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoint if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -1100,6 +1110,8 @@ def biorxiv_fetch(
     out: str,
     workspace: str | None,
     grobid_url: str | None,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -1121,12 +1133,22 @@ def biorxiv_fetch(
 
         # Add to workspace for deduplication
         text-fetch biorxiv fetch --days 30 --workspace ./my-corpus --out ./output
+
+        # Resume interrupted fetch
+        text-fetch biorxiv fetch --days 30 --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch biorxiv fetch --days 30 --workspace ./my-corpus --update
     """
     import logging
     import sys
 
     from .biorxiv import fetch_biorxiv
     from .workspace import Workspace
+
+    # Validate update flag
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     config = ctx.obj["config"]
     resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
@@ -1171,6 +1193,8 @@ def biorxiv_fetch(
             max_results=max_results,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
     finally:
         if progress_bar is not None:
@@ -1198,6 +1222,8 @@ def biorxiv_fetch(
     click.echo(f"  Via GROBID: {stats['pdf_converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("resumed_from"):
+        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
     if stats.get("duplicates_skipped"):
         click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
@@ -1246,6 +1272,16 @@ def medrxiv(ctx: click.Context) -> None:
     help="Add results to workspace (enables cross-search deduplication)",
 )
 @click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoint if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -1261,6 +1297,8 @@ def medrxiv_fetch(
     out: str,
     workspace: str | None,
     grobid_url: str | None,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -1279,12 +1317,22 @@ def medrxiv_fetch(
 
         # Add to workspace for deduplication
         text-fetch medrxiv fetch --days 30 --workspace ./my-corpus --out ./output
+
+        # Resume interrupted fetch
+        text-fetch medrxiv fetch --days 30 --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch medrxiv fetch --days 30 --workspace ./my-corpus --update
     """
     import logging
     import sys
 
     from .biorxiv import fetch_medrxiv
     from .workspace import Workspace
+
+    # Validate update flag
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     config = ctx.obj["config"]
     resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
@@ -1329,6 +1377,8 @@ def medrxiv_fetch(
             max_results=max_results,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
     finally:
         if progress_bar is not None:
@@ -1356,6 +1406,8 @@ def medrxiv_fetch(
     click.echo(f"  Via GROBID: {stats['pdf_converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("resumed_from"):
+        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
     if stats.get("duplicates_skipped"):
         click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")

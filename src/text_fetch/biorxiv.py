@@ -20,6 +20,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import requests
 
+from .checkpoint import (
+    FetchCheckpoint,
+    clear_checkpoint,
+    get_checkpoint_path,
+    load_checkpoint_if_exists,
+)
 from .common import RateLimiter
 
 if TYPE_CHECKING:
@@ -507,6 +513,8 @@ def _fetch_preprints(
     max_results: int = 100,
     verbose: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Internal function to fetch preprints from bioRxiv or medRxiv.
 
@@ -530,6 +538,8 @@ def _fetch_preprints(
         max_results: Maximum articles.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(doi, current, total).
+        resume: Resume from checkpoint if available.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dict.
@@ -546,16 +556,35 @@ def _fetch_preprints(
         output_path.mkdir(parents=True, exist_ok=True)
         search_id = None
 
+    # Handle update mode - adjust start_date based on last fetch
+    effective_start_date = start_date
+    effective_days = days
+    if update and workspace:
+        last_fetch = workspace.get_last_fetch_date(server)
+        if last_fetch:
+            # Use last fetch date as start date
+            effective_start_date = last_fetch
+            effective_days = None  # Use date range instead of days
+            if verbose:
+                logger.info("Update mode: fetching papers since %s", last_fetch)
+        else:
+            if verbose:
+                logger.info(
+                    "Update mode: no previous fetch, proceeding with full fetch"
+                )
+
     # Initialize stats
     stats: dict[str, Any] = {
-        "server": server,
+        "source": server,
         "articles_found": 0,
         "jats_direct": 0,
         "pdf_converted": 0,
         "valid": 0,
         "incomplete": 0,
+        "skipped": 0,
         "duplicates_skipped": 0,
         "errors": 0,
+        "resumed_from": 0,
     }
 
     # Initialize clients
@@ -566,11 +595,20 @@ def _fetch_preprints(
     if dois:
         articles = client.get_by_dois([client.normalize_doi(d) for d in dois])
     else:
+        # Use effective dates for update mode
+        search_start = effective_start_date
+        search_end = end_date
+        search_days = effective_days
+
+        # If update mode with effective_start_date but no end_date, use today
+        if effective_start_date and not search_end and not search_days:
+            search_end = datetime.now().strftime("%Y-%m-%d")
+
         articles = client.search(
-            start_date=start_date,
-            end_date=end_date,
+            start_date=search_start,
+            end_date=search_end,
             category=category,
-            days=days,
+            days=search_days,
             max_results=max_results,
         )
 
@@ -580,7 +618,49 @@ def _fetch_preprints(
         logger.info("Found %d articles", len(articles))
 
     if not articles:
+        # Update workspace source record even if no results
+        if workspace:
+            workspace.update_source_record(server, 0)
         return stats
+
+    # Build config for checkpoint
+    fetch_config = {
+        "server": server,
+        "start_date": effective_start_date,
+        "end_date": end_date,
+        "category": category,
+        "days": effective_days,
+        "dois": dois,
+        "max_results": max_results,
+    }
+
+    # Load or create checkpoint
+    checkpoint: FetchCheckpoint | None = None
+    checkpoint_path = get_checkpoint_path(output_path)
+
+    if resume:
+        checkpoint = load_checkpoint_if_exists(output_path)
+        if checkpoint:
+            # Validate config hasn't changed
+            if not checkpoint.validate_config(fetch_config):
+                logger.warning("Config changed since checkpoint. Starting fresh.")
+                checkpoint = None
+            else:
+                stats["resumed_from"] = len(checkpoint.completed)
+                if verbose:
+                    logger.info(
+                        "Resuming from checkpoint: %d completed",
+                        len(checkpoint.completed),
+                    )
+
+    if checkpoint is None:
+        checkpoint = FetchCheckpoint.create(
+            config=fetch_config,
+            source=server,
+            total_expected=len(articles),
+            output_path=output_path,
+        )
+        checkpoint.reset_save_tracking()
 
     # Resolve XSLT path for GROBID fallback - use bundled package resource
     if xslt_path is None:
@@ -596,11 +676,18 @@ def _fetch_preprints(
         if progress_callback:
             progress_callback(article.doi, i, total)
 
+        # Skip if already completed in checkpoint
+        if checkpoint.is_complete(article.doi):
+            stats["skipped"] += 1
+            continue
+
         # Check for duplicate DOI in workspace
         if workspace and workspace.has_doi(article.doi):
             logger.debug("Skipping duplicate DOI: %s", article.doi)
             workspace.record_duplicate_skip(article.doi)
             stats["duplicates_skipped"] += 1
+            # Mark as complete in checkpoint to avoid retry
+            checkpoint.mark_complete(article.doi)
             continue
 
         try:
@@ -629,6 +716,8 @@ def _fetch_preprints(
 
             if jats is None:
                 stats["errors"] += 1
+                checkpoint.mark_failed(article.doi, "Failed to fetch JATS or PDF")
+                checkpoint.save_if_needed(checkpoint_path)
                 continue
 
             # Validate content
@@ -662,9 +751,30 @@ def _fetch_preprints(
             else:
                 stats["incomplete"] += 1
 
+            # Mark complete and save checkpoint periodically
+            checkpoint.mark_complete(article.doi)
+            checkpoint.save_if_needed(checkpoint_path)
+
         except Exception as e:
             logger.error("Error processing %s: %s", article.doi, e)
             stats["errors"] += 1
+            checkpoint.mark_failed(article.doi, str(e))
+            checkpoint.save_if_needed(checkpoint_path)
+
+    # Final checkpoint save and cleanup
+    checkpoint.save(checkpoint_path)
+
+    # Clear checkpoint on successful completion (all attempted)
+    fetched = stats["jats_direct"] + stats["pdf_converted"]
+    attempted = fetched + stats["errors"] + stats["duplicates_skipped"]
+    if attempted >= len(articles) - stats["resumed_from"]:
+        clear_checkpoint(output_path)
+        if verbose:
+            logger.info("Fetch complete, checkpoint cleared")
+
+    # Update workspace source record
+    if workspace:
+        workspace.update_source_record(server, fetched)
 
     if verbose:
         logger.info(
@@ -691,6 +801,8 @@ def fetch_biorxiv(
     max_results: int = 100,
     verbose: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch bioRxiv articles and save as JATS.
 
@@ -713,6 +825,8 @@ def fetch_biorxiv(
         max_results: Maximum articles.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(doi, current, total).
+        resume: Resume from checkpoint if available.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dict.
@@ -731,6 +845,8 @@ def fetch_biorxiv(
         max_results=max_results,
         verbose=verbose,
         progress_callback=progress_callback,
+        resume=resume,
+        update=update,
     )
 
 
@@ -747,6 +863,8 @@ def fetch_medrxiv(
     max_results: int = 100,
     verbose: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch medRxiv articles and save as JATS.
 
@@ -766,4 +884,6 @@ def fetch_medrxiv(
         max_results=max_results,
         verbose=verbose,
         progress_callback=progress_callback,
+        resume=resume,
+        update=update,
     )
