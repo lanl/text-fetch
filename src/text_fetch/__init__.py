@@ -1,6 +1,6 @@
 """text-fetch: Acquire scientific literature for RAG pipelines."""
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 from .biorxiv import (
     BIORXIV_CATEGORIES,

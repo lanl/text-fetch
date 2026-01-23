@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-01-23
+
+### Added
+- **Resume & Update for All Sources** - Extended checkpoint/resume and update mode to all sources
+  - `--resume` flag on all source fetch commands (biorxiv, medrxiv, arxiv, chemrxiv, pmc)
+  - `--update` flag on all source fetch commands
+  - `--resume` and `--update` flags on unified `text-fetch fetch` command
+  - Per-source checkpoint coordination for multi-source fetches
+
+- **bioRxiv/medRxiv Resume & Update**
+  - Resume support with DOI-based checkpoint tracking
+  - Update mode using `start_date` parameter
+  - Workspace source record updates
+
+- **arXiv Resume & Update**
+  - Resume support with arXiv ID tracking
+  - Update mode using `submittedDate:[YYYYMMDD TO *]` query syntax
+  - Workspace source record updates
+
+- **ChemRxiv Resume & Update**
+  - Resume support with item_id tracking
+  - Update mode using `date_from` parameter
+  - Workspace source record updates
+
+- **PMC Resume & Update**
+  - Resume support with PMCID tracking
+  - Update mode using PubMed date qualifier `[dp]`
+  - Workspace source record updates
+
+- **Unified Fetch Integration**
+  - `--resume` flag passes to all source fetches
+  - `--update` flag passes to all source fetches
+  - Per-source checkpoint files maintained separately
+
+- **Enhanced Workspace Update Command**
+  - `text-fetch workspace update` now supports all sources
+  - Per-source update summaries (fetched, valid, errors)
+  - `--grobid-url`, `--email`, `--api-key` options for source requirements
+  - Source-specific error handling (GROBID for arxiv/chemrxiv, email for pmc)
+
+### CLI
+- `--resume` flag on biorxiv, medrxiv, arxiv, chemrxiv, pmc fetch commands
+- `--update` flag on biorxiv, medrxiv, arxiv, chemrxiv, pmc fetch commands
+- `--resume` and `--update` flags on unified `text-fetch fetch` command
+- Enhanced `workspace update` with per-source results display
+
+### Tests
+- All 496 tests passing
+
+### User Stories Implemented
+1. **Resume Any Source** - "My bioRxiv fetch was downloading 300 papers when my laptop went to sleep. I want to resume where I left off."
+2. **Update Any Source** - "I built a corpus using arXiv 3 months ago. I want to fetch only papers published since then."
+3. **Unified Fetch Resume** - "My multi-source fetch was interrupted. I want to resume from where each source left off."
+4. **Complete Workspace Update** - "I have a workspace with papers from 5 sources. I want to update all of them with new papers."
+
 ## [0.2.3] - 2026-01-23
 
 ### Added
