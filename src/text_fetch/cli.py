@@ -744,6 +744,11 @@ def biorxiv(ctx: click.Context) -> None:
 @click.option("--doi", multiple=True, help="Specific DOIs to fetch")
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
+@click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
 @click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
@@ -758,6 +763,7 @@ def biorxiv_fetch(
     doi: tuple[str, ...],
     max_results: int,
     out: str,
+    workspace: str | None,
     grobid_url: str | None,
     tarball: bool,
     tarball_name: str | None,
@@ -777,10 +783,15 @@ def biorxiv_fetch(
 
         # Specific DOIs
         text-fetch biorxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch biorxiv fetch --days 30 --workspace ./my-corpus --out ./output
     """
     import logging
+    import sys
 
     from .biorxiv import fetch_biorxiv
+    from .workspace import Workspace
 
     config = ctx.obj["config"]
     resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
@@ -788,6 +799,14 @@ def biorxiv_fetch(
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
         click.echo(f"GROBID URL (fallback): {resolved_grobid}")
+
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
 
     # Progress bar
     progress_bar = None
@@ -812,6 +831,7 @@ def biorxiv_fetch(
             days=days,
             dois=list(doi) if doi else None,
             output_dir=out,
+            workspace=ws,
             grobid_url=resolved_grobid,
             max_results=max_results,
             verbose=verbose,
@@ -821,6 +841,20 @@ def biorxiv_fetch(
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
 
+    # Record search in workspace
+    if ws:
+        cmd = " ".join(sys.argv)
+        search_config = {
+            "source": "biorxiv",
+            "start_date": start_date,
+            "end_date": end_date,
+            "days": days,
+            "category": category,
+            "dois": list(doi) if doi else None,
+            "max_results": max_results,
+        }
+        ws.record_search(config=search_config, command=cmd, stats=stats)
+
     # Summary
     click.echo("\n" + "=" * 50)
     click.echo("Fetch complete!")
@@ -829,21 +863,31 @@ def biorxiv_fetch(
     click.echo(f"  Via GROBID: {stats['pdf_converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("duplicates_skipped"):
+        click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
-    click.echo(f"\nOutput: {out}/")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
 
-    # Create tarball if requested
-    cmd = f"text-fetch biorxiv fetch --days {days or ''} --out {out}"
-    _handle_tarball_creation(
-        output_dir=out,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=stats,
-        search_config_dict=None,
-        command=cmd,
-        source="biorxiv",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        cmd = f"text-fetch biorxiv fetch --days {days or ''} --out {out}"
+        _handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict=None,
+            command=cmd,
+            source="biorxiv",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @cli.group()
@@ -861,6 +905,11 @@ def medrxiv(ctx: click.Context) -> None:
 @click.option("--doi", multiple=True, help="Specific DOIs to fetch")
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--out", required=True, help="Output directory")
+@click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
 @click.option("--grobid-url", help="GROBID service URL (for PDF fallback)")
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
@@ -875,6 +924,7 @@ def medrxiv_fetch(
     doi: tuple[str, ...],
     max_results: int,
     out: str,
+    workspace: str | None,
     grobid_url: str | None,
     tarball: bool,
     tarball_name: str | None,
@@ -891,10 +941,15 @@ def medrxiv_fetch(
 
         # Date range
         text-fetch medrxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch medrxiv fetch --days 30 --workspace ./my-corpus --out ./output
     """
     import logging
+    import sys
 
     from .biorxiv import fetch_medrxiv
+    from .workspace import Workspace
 
     config = ctx.obj["config"]
     resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
@@ -902,6 +957,14 @@ def medrxiv_fetch(
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
         click.echo(f"GROBID URL (fallback): {resolved_grobid}")
+
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
 
     # Progress bar
     progress_bar = None
@@ -926,6 +989,7 @@ def medrxiv_fetch(
             days=days,
             dois=list(doi) if doi else None,
             output_dir=out,
+            workspace=ws,
             grobid_url=resolved_grobid,
             max_results=max_results,
             verbose=verbose,
@@ -935,6 +999,20 @@ def medrxiv_fetch(
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
 
+    # Record search in workspace
+    if ws:
+        cmd = " ".join(sys.argv)
+        search_config = {
+            "source": "medrxiv",
+            "start_date": start_date,
+            "end_date": end_date,
+            "days": days,
+            "category": category,
+            "dois": list(doi) if doi else None,
+            "max_results": max_results,
+        }
+        ws.record_search(config=search_config, command=cmd, stats=stats)
+
     # Summary
     click.echo("\n" + "=" * 50)
     click.echo("Fetch complete!")
@@ -943,21 +1021,31 @@ def medrxiv_fetch(
     click.echo(f"  Via GROBID: {stats['pdf_converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("duplicates_skipped"):
+        click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
-    click.echo(f"\nOutput: {out}/")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
 
-    # Create tarball if requested
-    cmd = f"text-fetch medrxiv fetch --days {days or ''} --out {out}"
-    _handle_tarball_creation(
-        output_dir=out,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=stats,
-        search_config_dict=None,
-        command=cmd,
-        source="medrxiv",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        cmd = f"text-fetch medrxiv fetch --days {days or ''} --out {out}"
+        _handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict=None,
+            command=cmd,
+            source="medrxiv",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @cli.group()

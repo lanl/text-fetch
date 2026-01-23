@@ -25,6 +25,8 @@ from .common import RateLimiter
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .workspace import Workspace
+
 logger = logging.getLogger(__name__)
 
 Server = Literal["biorxiv", "medrxiv"]
@@ -497,6 +499,7 @@ def _fetch_preprints(
     days: int | None = None,
     dois: list[str] | None = None,
     output_dir: str | Path = "output",
+    workspace: Workspace | None = None,
     grobid_url: str | None = None,
     xslt_path: str | Path | None = None,
     max_results: int = 100,
@@ -518,7 +521,8 @@ def _fetch_preprints(
         category: Category filter.
         days: Alternative - recent N days.
         dois: Alternative - list of DOIs to fetch.
-        output_dir: Output directory.
+        output_dir: Output directory (used if workspace is None).
+        workspace: Optional workspace for deduplication and output.
         grobid_url: GROBID service URL (for PDF fallback).
         xslt_path: Path to tei2jats.xsl.
         max_results: Maximum articles.
@@ -531,8 +535,14 @@ def _fetch_preprints(
     from .grobid import GROBIDClient
     from .pmc import JATSValidator, save_pmc_article
 
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # Determine output path and search_id
+    if workspace:
+        search_id = workspace._get_next_search_id()
+        output_path = workspace.path
+    else:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        search_id = None
 
     # Initialize stats
     stats: dict[str, Any] = {
@@ -542,6 +552,7 @@ def _fetch_preprints(
         "pdf_converted": 0,
         "valid": 0,
         "incomplete": 0,
+        "duplicates_skipped": 0,
         "errors": 0,
     }
 
@@ -588,6 +599,12 @@ def _fetch_preprints(
         if progress_callback:
             progress_callback(article.doi, i, total)
 
+        # Check for duplicate DOI in workspace
+        if workspace and workspace.has_doi(article.doi):
+            logger.debug("Skipping duplicate DOI: %s", article.doi)
+            stats["duplicates_skipped"] += 1
+            continue
+
         try:
             jats = None
 
@@ -616,16 +633,33 @@ def _fetch_preprints(
                 stats["errors"] += 1
                 continue
 
-            # Save with validation
-            article_id = f"{server}:{article.id_short}"
-            _saved_path, result, _entry = save_pmc_article(
-                pmcid=article_id,
-                xml_content=jats,
-                output_dir=output_path,
-                validator=validator,
-            )
+            # Validate content
+            result = validator.validate(jats)
+            is_valid = result.status.value == "valid"
 
-            if result.status.value == "valid":
+            # Save to appropriate location
+            if workspace:
+                # Use workspace to save file (handles DOI indexing)
+                article_id = f"{server}_{article.id_short}"
+                workspace.add_file(
+                    jats_content=jats,
+                    doi=article.doi,
+                    source=server,
+                    search_id=search_id or "",
+                    is_valid=is_valid,
+                    filename=f"{article_id}.xml",
+                )
+            else:
+                # Save with standard method
+                article_id = f"{server}:{article.id_short}"
+                _saved_path, result, _entry = save_pmc_article(
+                    pmcid=article_id,
+                    xml_content=jats,
+                    output_dir=output_path,
+                    validator=validator,
+                )
+
+            if is_valid:
                 stats["valid"] += 1
             else:
                 stats["incomplete"] += 1
@@ -653,6 +687,7 @@ def fetch_biorxiv(
     days: int | None = None,
     dois: list[str] | None = None,
     output_dir: str | Path = "biorxiv_output",
+    workspace: Workspace | None = None,
     grobid_url: str | None = None,
     xslt_path: str | Path | None = None,
     max_results: int = 100,
@@ -673,7 +708,8 @@ def fetch_biorxiv(
         category: Category filter.
         days: Alternative - recent N days.
         dois: Alternative - list of DOIs to fetch.
-        output_dir: Output directory.
+        output_dir: Output directory (used if workspace is None).
+        workspace: Optional workspace for deduplication and output.
         grobid_url: GROBID service URL (for PDF fallback).
         xslt_path: Path to tei2jats.xsl.
         max_results: Maximum articles.
@@ -691,6 +727,7 @@ def fetch_biorxiv(
         days=days,
         dois=dois,
         output_dir=output_dir,
+        workspace=workspace,
         grobid_url=grobid_url,
         xslt_path=xslt_path,
         max_results=max_results,
@@ -706,6 +743,7 @@ def fetch_medrxiv(
     days: int | None = None,
     dois: list[str] | None = None,
     output_dir: str | Path = "medrxiv_output",
+    workspace: Workspace | None = None,
     grobid_url: str | None = None,
     xslt_path: str | Path | None = None,
     max_results: int = 100,
@@ -724,6 +762,7 @@ def fetch_medrxiv(
         days=days,
         dois=dois,
         output_dir=output_dir,
+        workspace=workspace,
         grobid_url=grobid_url,
         xslt_path=xslt_path,
         max_results=max_results,
