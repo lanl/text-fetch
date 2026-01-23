@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "DOIIndex",
     "SearchRecord",
+    "SourceFetchRecord",
     "Workspace",
     "WorkspaceError",
     "WorkspaceManifest",
@@ -25,6 +26,45 @@ class WorkspaceError(Exception):
 
 
 @dataclass
+class SourceFetchRecord:
+    """Record of last fetch from a specific source.
+
+    Tracks when a source was last fetched, enabling incremental
+    updates that only fetch papers published since the last fetch.
+
+    Attributes:
+        source: Source name (e.g., "europepmc", "biorxiv").
+        last_fetch: ISO timestamp of last fetch.
+        last_config_hash: Hash of config used for change detection.
+        papers_fetched: Total papers fetched from this source.
+    """
+
+    source: str
+    last_fetch: str
+    last_config_hash: str
+    papers_fetched: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "source": self.source,
+            "last_fetch": self.last_fetch,
+            "last_config_hash": self.last_config_hash,
+            "papers_fetched": self.papers_fetched,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SourceFetchRecord:
+        """Create from dictionary."""
+        return cls(
+            source=data["source"],
+            last_fetch=data.get("last_fetch", ""),
+            last_config_hash=data.get("last_config_hash", ""),
+            papers_fetched=data.get("papers_fetched", 0),
+        )
+
+
+@dataclass
 class WorkspaceManifest:
     """Workspace metadata stored in .text-fetch/workspace.json."""
 
@@ -33,6 +73,7 @@ class WorkspaceManifest:
     updated: str = ""
     name: str = ""
     statistics: dict[str, int] = field(default_factory=dict)
+    source_records: dict[str, SourceFetchRecord] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -42,17 +83,23 @@ class WorkspaceManifest:
             "updated": self.updated,
             "name": self.name,
             "statistics": self.statistics,
+            "source_records": {k: v.to_dict() for k, v in self.source_records.items()},
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkspaceManifest:
         """Create from dictionary."""
+        source_records_data = data.get("source_records", {})
+        source_records = {
+            k: SourceFetchRecord.from_dict(v) for k, v in source_records_data.items()
+        }
         return cls(
             version=data.get("version", "1.0"),
             created=data.get("created", ""),
             updated=data.get("updated", ""),
             name=data.get("name", ""),
             statistics=data.get("statistics", {}),
+            source_records=source_records,
         )
 
 
@@ -658,6 +705,74 @@ class Workspace:
         self._save_manifest()
 
         logger.info("Cleared workspace: %s (keep_history=%s)", self.path, keep_history)
+
+    def update_source_record(
+        self,
+        source: str,
+        papers_fetched: int,
+        config_hash: str | None = None,
+    ) -> None:
+        """Update or create a source fetch record.
+
+        Call this after successfully fetching from a source to track
+        the last fetch time for incremental updates.
+
+        Args:
+            source: Source name (e.g., "europepmc", "biorxiv").
+            papers_fetched: Number of papers fetched in this operation.
+            config_hash: Optional config hash for change detection.
+        """
+        now = datetime.now(UTC).isoformat()
+
+        if source in self.manifest.source_records:
+            # Update existing record
+            record = self.manifest.source_records[source]
+            record.last_fetch = now
+            record.papers_fetched += papers_fetched
+            if config_hash:
+                record.last_config_hash = config_hash
+        else:
+            # Create new record
+            self.manifest.source_records[source] = SourceFetchRecord(
+                source=source,
+                last_fetch=now,
+                last_config_hash=config_hash or "",
+                papers_fetched=papers_fetched,
+            )
+
+        self.manifest.updated = now
+        self._save_manifest()
+        logger.debug(
+            "Updated source record for %s: %d papers",
+            source,
+            papers_fetched,
+        )
+
+    def get_source_record(self, source: str) -> SourceFetchRecord | None:
+        """Get the fetch record for a source.
+
+        Args:
+            source: Source name (e.g., "europepmc", "biorxiv").
+
+        Returns:
+            SourceFetchRecord if source has been fetched, None otherwise.
+        """
+        return self.manifest.source_records.get(source)
+
+    def get_last_fetch_date(self, source: str) -> str | None:
+        """Get the last fetch date for a source.
+
+        Args:
+            source: Source name (e.g., "europepmc", "biorxiv").
+
+        Returns:
+            ISO date string (YYYY-MM-DD) or None if no previous fetch.
+        """
+        record = self.get_source_record(source)
+        if record and record.last_fetch:
+            # Extract date portion from ISO timestamp
+            return record.last_fetch[:10]
+        return None
 
     def build_tarball(
         self,
