@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-01-22
+
+### Added
+- **Workspace Integration for All Fetch Commands** - Seamless `--workspace` option for building deduplicated corpora
+  - `--workspace` option on `text-fetch europepmc fetch`
+  - `--workspace` option on `text-fetch biorxiv fetch`
+  - `--workspace` option on `text-fetch medrxiv fetch`
+  - `--workspace` option on `text-fetch arxiv fetch`
+  - `--workspace` option on `text-fetch chemrxiv fetch`
+  - `--workspace` option on `text-fetch pmc fetch`
+  - `--workspace` option on `text-fetch fetch` (unified)
+  - `--workspace` option on `text-fetch pdf batch`
+  - Automatic DOI deduplication across searches
+  - Search history recording with statistics
+  
+- **From-Tarball Reproducibility** - Re-run fetches from existing tarballs
+  - `--from-tarball` option on `text-fetch fetch`
+  - `extract_search_config_from_tarball()` function in `common.py`
+  - Extract and re-use search configuration from embedded provenance
+
+### Enhanced
+- `unified_fetch()` now accepts optional `workspace` parameter
+- `process_pdf_batch()` now accepts optional `workspace` parameter
+- All per-source fetch functions support workspace integration:
+  - `fetch_europepmc(workspace=...)`
+  - `fetch_biorxiv(workspace=...)`
+  - `fetch_medrxiv(workspace=...)`
+  - `fetch_arxiv(workspace=...)`
+  - `fetch_chemrxiv(workspace=...)`
+  - `fetch_pmc(workspace=...)`
+
+### Tests
+- Added 7 new tests for from-tarball and PDF batch workspace features
+- Total test count: 464 (all passing)
+
+### Documentation
+- Updated README with Workflow 5 (Workspace Corpus) CLI examples
+- Added Workflow 6 (Reproducible Fetch from Tarball)
+- Updated API_REFERENCE.md with workspace parameter documentation
+
 ## [0.2.0] - 2026-01-22
 
 ### Added
