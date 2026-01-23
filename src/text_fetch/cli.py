@@ -2401,6 +2401,17 @@ def workspace_list_searches(path: str) -> None:
     is_flag=True,
     help="Show what would be fetched without downloading",
 )
+@click.option("--grobid-url", help="GROBID service URL (for arxiv, chemrxiv)")
+@click.option(
+    "--email",
+    envvar="NCBI_EMAIL",
+    help="NCBI email (required for pmc)",
+)
+@click.option(
+    "--api-key",
+    envvar="NCBI_API_KEY",
+    help="NCBI API key",
+)
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
 def workspace_update_cmd(
@@ -2408,6 +2419,9 @@ def workspace_update_cmd(
     path: str,
     source: str | None,
     dry_run: bool,
+    grobid_url: str | None,
+    email: str | None,
+    api_key: str | None,
     verbose: bool,
 ) -> None:
     """Re-run workspace searches to fetch new papers.
@@ -2437,6 +2451,19 @@ def workspace_update_cmd(
     except WorkspaceError as e:
         raise click.ClickException(str(e)) from e
 
+    config = ctx.obj["config"]
+
+    # Resolve settings
+    resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
+
+    import contextlib
+
+    resolved_email = None
+    with contextlib.suppress(ValueError):
+        resolved_email = get_ncbi_email(cli_value=email, config=config)
+
+    resolved_api_key = get_ncbi_api_key(cli_value=api_key, config=config)
+
     click.echo(f"Workspace: {ws.manifest.name}")
     click.echo(f"Path: {ws.path}")
 
@@ -2465,54 +2492,189 @@ def workspace_update_cmd(
         click.echo("\nRun without --dry-run to fetch updates.")
         return
 
-    # Actually perform updates
+    # Actually perform updates - per-source tracking
+    update_results: dict[str, dict[str, Any]] = {}
     total_new = 0
 
     for src in sources_to_update:
         record = source_records.get(src)
         if not record:
             click.echo(f"\n{src}: No previous fetch recorded, skipping")
+            update_results[src] = {"status": "skipped", "reason": "no previous fetch"}
             continue
 
         last_date_str = record.last_fetch[:10] if record.last_fetch else "unknown"
         click.echo(f"\n{src}: Checking for papers since {last_date_str}...")
 
-        # For now, only europepmc supports update mode
-        if src == "europepmc":
-            from .europepmc import fetch_europepmc
+        # Get the most recent search config for this source
+        searches = ws.get_searches()
+        search_config = None
+        for search in searches:
+            if search.config.get("source") == src:
+                search_config = search.config
+                break
 
-            # Get the most recent search config for this source
-            searches = ws.get_searches()
-            search_config = None
-            for search in searches:
-                if search.config.get("source") == "europepmc":
-                    search_config = search.config
-                    break
+        if not search_config:
+            click.echo("  No previous search config found, skipping")
+            update_results[src] = {"status": "skipped", "reason": "no search config"}
+            continue
 
-            if not search_config:
-                click.echo("  No previous search config found, skipping")
-                continue
-
-            stats = fetch_europepmc(
-                query=search_config.get("query"),
-                author=search_config.get("author"),
-                keywords=search_config.get("keywords"),
-                output_dir=str(ws.path),
+        try:
+            stats = _run_source_update(
+                src=src,
+                search_config=search_config,
                 workspace=ws,
-                max_results=search_config.get("max_results", 100),
-                open_access_only=search_config.get("open_access_only", True),
+                grobid_url=resolved_grobid,
+                email=resolved_email,
+                api_key=resolved_api_key,
                 verbose=verbose,
-                update=True,
             )
 
-            new_papers = stats.get("fetched", 0)
+            new_papers = stats.get("fetched", 0) + stats.get("converted", 0)
             total_new += new_papers
+            update_results[src] = {
+                "status": "success",
+                "fetched": new_papers,
+                "valid": stats.get("valid", 0),
+                "incomplete": stats.get("incomplete", 0),
+                "errors": stats.get("errors", 0),
+            }
             click.echo(f"  Fetched {new_papers} new papers")
-        else:
-            click.echo(f"  Update mode not yet implemented for {src}")
 
+        except Exception as e:
+            click.echo(f"  Error: {e}")
+            update_results[src] = {"status": "error", "error": str(e)}
+
+    # Summary
     click.echo(f"\n{'=' * 50}")
-    click.echo(f"Update complete: {total_new} new papers added")
+    click.echo("Update complete!")
+    click.echo()
+    click.echo("Per-source results:")
+    for src, result in update_results.items():
+        if result.get("status") == "success":
+            fetched = result.get("fetched", 0)
+            valid = result.get("valid", 0)
+            click.echo(f"  {src}: {fetched} new ({valid} valid)")
+        elif result.get("status") == "skipped":
+            click.echo(f"  {src}: skipped - {result.get('reason')}")
+        else:
+            click.echo(f"  {src}: error - {result.get('error')}")
+    click.echo()
+    click.echo(f"Total new papers: {total_new}")
+
+
+def _run_source_update(
+    src: str,
+    search_config: dict[str, Any],
+    workspace: Any,
+    grobid_url: str | None,
+    email: str | None,
+    api_key: str | None,
+    verbose: bool,
+) -> dict[str, Any]:
+    """Run update for a specific source."""
+    if src == "europepmc":
+        from .europepmc import fetch_europepmc
+
+        return fetch_europepmc(
+            query=search_config.get("query"),
+            author=search_config.get("author"),
+            keywords=search_config.get("keywords"),
+            output_dir=str(workspace.path),
+            workspace=workspace,
+            max_results=search_config.get("max_results", 100),
+            open_access_only=search_config.get("open_access_only", True),
+            verbose=verbose,
+            update=True,
+        )
+
+    elif src == "biorxiv":
+        from .biorxiv import fetch_biorxiv
+
+        return fetch_biorxiv(
+            start_date=search_config.get("start_date"),
+            end_date=search_config.get("end_date"),
+            days=search_config.get("days"),
+            category=search_config.get("category"),
+            dois=search_config.get("dois"),
+            output_dir=str(workspace.path),
+            workspace=workspace,
+            grobid_url=grobid_url,
+            max_results=search_config.get("max_results", 100),
+            verbose=verbose,
+            update=True,
+        )
+
+    elif src == "medrxiv":
+        from .biorxiv import fetch_medrxiv
+
+        return fetch_medrxiv(
+            start_date=search_config.get("start_date"),
+            end_date=search_config.get("end_date"),
+            days=search_config.get("days"),
+            category=search_config.get("category"),
+            dois=search_config.get("dois"),
+            output_dir=str(workspace.path),
+            workspace=workspace,
+            grobid_url=grobid_url,
+            max_results=search_config.get("max_results", 100),
+            verbose=verbose,
+            update=True,
+        )
+
+    elif src == "arxiv":
+        from .arxiv import fetch_arxiv
+
+        if not grobid_url:
+            raise ValueError("GROBID URL required for arXiv update")
+
+        return fetch_arxiv(
+            query=search_config.get("query"),
+            output_dir=str(workspace.path),
+            workspace=workspace,
+            grobid_url=grobid_url,
+            max_results=search_config.get("max_results", 100),
+            verbose=verbose,
+            update=True,
+        )
+
+    elif src == "chemrxiv":
+        from .chemrxiv import fetch_chemrxiv
+
+        if not grobid_url:
+            raise ValueError("GROBID URL required for ChemRxiv update")
+
+        return fetch_chemrxiv(
+            term=search_config.get("term"),
+            category_ids=search_config.get("category_ids"),
+            date_from=search_config.get("date_from"),
+            date_to=search_config.get("date_to"),
+            output_dir=str(workspace.path),
+            workspace=workspace,
+            grobid_url=grobid_url,
+            max_results=search_config.get("max_results", 100),
+            verbose=verbose,
+            update=True,
+        )
+
+    elif src == "pmc":
+        from .pmc import fetch_pmc
+
+        if not email:
+            raise ValueError("NCBI email required for PMC update")
+
+        return fetch_pmc(
+            query=search_config.get("query"),
+            email=email,
+            api_key=api_key,
+            output_dir=str(workspace.path),
+            workspace=workspace,
+            verbose=verbose,
+            update=True,
+        )
+
+    else:
+        raise ValueError(f"Unknown source: {src}")
 
 
 @workspace.command(name="clear")
