@@ -144,6 +144,7 @@ from text_fetch import unified_fetch, deduplicate_by_doi
 def unified_fetch(
     config: SearchConfig,
     output_dir: str | Path,
+    workspace: Workspace | None = None,
     email: str | None = None,
     api_key: str | None = None,
     grobid_url: str | None = None,
@@ -154,7 +155,8 @@ def unified_fetch(
     
     Args:
         config: SearchConfig with sources and query parameters.
-        output_dir: Base directory for output files.
+        output_dir: Base directory for output files (used if workspace is None).
+        workspace: Optional Workspace for deduplication and file management.
         email: Email for NCBI API (required for pmc source).
         api_key: NCBI API key (optional, for higher rate limits).
         grobid_url: GROBID service URL (required for arxiv, chemrxiv).
@@ -169,6 +171,7 @@ def unified_fetch(
             "total_incomplete": int,
             "total_errors": int,
             "duplicates_removed": int,
+            "duplicates_skipped": int,  # When using workspace
             "per_source": {
                 "pmc": {"fetched": int, "valid": int, ...},
                 "europepmc": {...},
@@ -505,6 +508,28 @@ print(f"Incomplete: {result['incomplete']}")
 print(f"Errors: {result['errors']}")
 ```
 
+### Batch Processing with Workspace
+
+```python
+from text_fetch import process_pdf_batch, Workspace
+from pathlib import Path
+
+# Load or create workspace
+ws = Workspace.load_or_init(Path("./my-corpus"))
+
+result = process_pdf_batch(
+    pdf_dir=Path("./Manuscripts"),
+    output_dir=Path("./output"),  # Fallback, not used when workspace provided
+    workspace=ws,  # Enables DOI deduplication
+    grobid_url="http://localhost:8070",
+    prefer_fulltext=True,
+)
+
+print(f"Total: {result['total']}")
+print(f"Valid: {result['valid']}")
+print(f"Duplicates skipped: {result.get('duplicates_skipped', 0)}")
+```
+
 ### Processing Result
 
 ```python
@@ -809,6 +834,7 @@ from text_fetch.common import (
     sha1_of_bytes,
     create_tarball,
     extract_doi_from_text,
+    extract_search_config_from_tarball,
     RateLimiter,
 )
 
@@ -824,6 +850,14 @@ create_tarball("./output", "corpus.tar.gz")
 
 # Extract DOI from text
 doi = extract_doi_from_text("See https://doi.org/10.1234/example for details")
+
+# Extract search config from existing tarball (for reproducibility)
+from pathlib import Path
+config_data = extract_search_config_from_tarball(Path("corpus.tar.gz"))
+if config_data:
+    print(f"Author: {config_data.get('author')}")
+    print(f"Sources: {config_data.get('sources')}")
+    # Use with SearchConfig.from_dict() to re-run the fetch
 
 # Rate limiting
 limiter = RateLimiter(max_per_sec=3.0)

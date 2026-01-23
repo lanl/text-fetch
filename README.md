@@ -478,7 +478,7 @@ ls output/pdfs/
 cat metadata.csv  # CSV with extracted metadata
 ```
 
-### Workflow 5: Workspace Corpus (v0.2.0)
+### Workflow 5: Workspace Corpus
 
 Build a deduplicated corpus from multiple author searches:
 
@@ -486,33 +486,32 @@ Build a deduplicated corpus from multiple author searches:
 # Initialize workspace
 text-fetch workspace init ./systems-biology-corpus --name "Systems Biology"
 
-# Add papers from multiple author searches
-# (when --workspace is integrated in v0.2.1)
-# For now, use the workspace Python API directly:
-python << 'EOF'
-from text_fetch import Workspace
+# Add papers from multiple author searches (--workspace option)
+text-fetch europepmc fetch --author "hlavacek ws" \
+  --workspace ./systems-biology-corpus --out ./tmp
+# Fetched 45 articles (45 valid, 0 incomplete)
 
-ws = Workspace.load("./systems-biology-corpus")
+text-fetch europepmc fetch --author "perelson as" \
+  --workspace ./systems-biology-corpus --out ./tmp
+# Fetched 52 articles (38 valid, 2 incomplete, 12 duplicates skipped)
 
-# Add files programmatically
-ws.add_file(
-    jats_content="<article>...</article>",
-    doi="10.1234/example",
-    source="europepmc",
-    search_id="search_001",
-    is_valid=True,
-)
+text-fetch biorxiv fetch --days 30 --category systems_biology \
+  --workspace ./systems-biology-corpus --out ./tmp
+# Fetched 23 articles (21 valid, 2 incomplete, 0 duplicates skipped)
 
-# Record search
-ws.record_search(
-    config={"author": "hlavacek ws"},
-    command="text-fetch europepmc fetch --author 'hlavacek ws'",
-    stats={"fetched": 10, "valid": 8},
-)
-EOF
+# Process local PDFs into workspace
+text-fetch pdf batch --dir ./Manuscripts \
+  --workspace ./systems-biology-corpus --out ./tmp
+# Processed 10 PDFs (8 valid, 2 incomplete, 0 duplicates skipped)
 
 # Check status
 text-fetch workspace status ./systems-biology-corpus
+# Workspace: Systems Biology
+# Valid articles: 112
+# Incomplete articles: 6
+# Unique DOIs: 112
+# Duplicates skipped: 12
+# Searches: 4
 
 # Build final tarball when done
 text-fetch workspace build ./systems-biology-corpus --tarball corpus.tar.gz
@@ -522,6 +521,24 @@ text-fetch workspace build ./systems-biology-corpus --tarball corpus.tar.gz
 - **Cross-search deduplication** - Same DOI from different searches is only stored once
 - **Search history** - Track which searches contributed to the corpus
 - **Provenance** - Built tarballs include search metadata
+
+### Workflow 6: Reproducible Fetch from Tarball
+
+Re-run a fetch from an existing tarball's embedded configuration:
+
+```bash
+# First, create a tarball with embedded config
+text-fetch fetch --config-file input/hlavacek.json --out ./output --tarball
+
+# Later, reproduce the same fetch (e.g., for updates)
+text-fetch fetch --from-tarball ./output/unified_corpus.tar.gz \
+  --out ./updated --tarball
+```
+
+This is useful for:
+- **Reproducing previous fetches** - Run the same search criteria again
+- **Updating corpora** - Re-fetch with the same config to get new articles
+- **Sharing search configs** - Tarball contains the exact search parameters used
 
 ## Development
 
