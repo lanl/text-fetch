@@ -20,6 +20,12 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from .checkpoint import (
+    FetchCheckpoint,
+    clear_checkpoint,
+    get_checkpoint_path,
+    load_checkpoint_if_exists,
+)
 from .common import RateLimiter
 
 if TYPE_CHECKING:
@@ -411,6 +417,8 @@ def fetch_chemrxiv(
     max_results: int = 100,
     verbose: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch ChemRxiv articles and convert to JATS.
 
@@ -433,6 +441,8 @@ def fetch_chemrxiv(
         max_results: Maximum articles.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(item_id, current, total).
+        resume: Resume from checkpoint if available.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dict.
@@ -449,6 +459,21 @@ def fetch_chemrxiv(
         output_path.mkdir(parents=True, exist_ok=True)
         search_id = None
 
+    # Handle update mode - adjust date_from based on last fetch
+    effective_date_from = date_from
+    if update and workspace:
+        last_fetch = workspace.get_last_fetch_date("chemrxiv")
+        if last_fetch:
+            # Use last fetch date as start date
+            effective_date_from = last_fetch
+            if verbose:
+                logger.info("Update mode: fetching papers since %s", last_fetch)
+        else:
+            if verbose:
+                logger.info(
+                    "Update mode: no previous fetch, proceeding with full fetch"
+                )
+
     # Initialize stats
     stats: dict[str, Any] = {
         "source": "chemrxiv",
@@ -457,8 +482,10 @@ def fetch_chemrxiv(
         "converted": 0,
         "valid": 0,
         "incomplete": 0,
+        "skipped": 0,
         "duplicates_skipped": 0,
         "errors": 0,
+        "resumed_from": 0,
     }
 
     # Initialize clients
@@ -476,7 +503,7 @@ def fetch_chemrxiv(
             client.iter_search(
                 term=term,
                 category_ids=category_ids,
-                date_from=date_from,
+                date_from=effective_date_from,
                 date_to=date_to,
                 max_results=max_results,
             )
@@ -488,7 +515,48 @@ def fetch_chemrxiv(
         logger.info("Found %d articles", len(articles))
 
     if not articles:
+        # Update workspace source record even if no results
+        if workspace:
+            workspace.update_source_record("chemrxiv", 0)
         return stats
+
+    # Build config for checkpoint
+    fetch_config = {
+        "term": term,
+        "category_ids": category_ids,
+        "date_from": effective_date_from,
+        "date_to": date_to,
+        "item_ids": item_ids,
+        "max_results": max_results,
+    }
+
+    # Load or create checkpoint
+    checkpoint: FetchCheckpoint | None = None
+    checkpoint_path = get_checkpoint_path(output_path)
+
+    if resume:
+        checkpoint = load_checkpoint_if_exists(output_path)
+        if checkpoint:
+            # Validate config hasn't changed
+            if not checkpoint.validate_config(fetch_config):
+                logger.warning("Config changed since checkpoint. Starting fresh.")
+                checkpoint = None
+            else:
+                stats["resumed_from"] = len(checkpoint.completed)
+                if verbose:
+                    logger.info(
+                        "Resuming from checkpoint: %d completed",
+                        len(checkpoint.completed),
+                    )
+
+    if checkpoint is None:
+        checkpoint = FetchCheckpoint.create(
+            config=fetch_config,
+            source="chemrxiv",
+            total_expected=len(articles),
+            output_path=output_path,
+        )
+        checkpoint.reset_save_tracking()
 
     # Resolve XSLT path - use bundled package resource
     if xslt_path is None:
@@ -510,11 +578,18 @@ def fetch_chemrxiv(
         if progress_callback:
             progress_callback(article.item_id, i, total)
 
+        # Skip if already completed in checkpoint
+        if checkpoint.is_complete(article.item_id):
+            stats["skipped"] += 1
+            continue
+
         # Check for duplicate DOI in workspace
         if workspace and article.doi and workspace.has_doi(article.doi):
             logger.debug("Skipping duplicate DOI: %s", article.doi)
             workspace.record_duplicate_skip(article.doi)
             stats["duplicates_skipped"] += 1
+            # Mark as complete in checkpoint to avoid retry
+            checkpoint.mark_complete(article.item_id)
             continue
 
         try:
@@ -522,6 +597,8 @@ def fetch_chemrxiv(
             pdf_bytes = client.download_pdf(article)
             if pdf_bytes is None:
                 stats["errors"] += 1
+                checkpoint.mark_failed(article.item_id, "Failed to download PDF")
+                checkpoint.save_if_needed(checkpoint_path)
                 continue
             stats["pdfs_downloaded"] += 1
 
@@ -529,6 +606,8 @@ def fetch_chemrxiv(
             jats = grobid_client.pdf_to_jats(pdf_bytes, xslt_path)
             if jats is None:
                 stats["errors"] += 1
+                checkpoint.mark_failed(article.item_id, "GROBID conversion failed")
+                checkpoint.save_if_needed(checkpoint_path)
                 continue
             stats["converted"] += 1
 
@@ -562,9 +641,29 @@ def fetch_chemrxiv(
             else:
                 stats["incomplete"] += 1
 
+            # Mark complete and save checkpoint periodically
+            checkpoint.mark_complete(article.item_id)
+            checkpoint.save_if_needed(checkpoint_path)
+
         except Exception as e:
             logger.error("Error processing %s: %s", article.item_id, e)
             stats["errors"] += 1
+            checkpoint.mark_failed(article.item_id, str(e))
+            checkpoint.save_if_needed(checkpoint_path)
+
+    # Final checkpoint save and cleanup
+    checkpoint.save(checkpoint_path)
+
+    # Clear checkpoint on successful completion (all attempted)
+    attempted = stats["converted"] + stats["errors"] + stats["duplicates_skipped"]
+    if attempted >= len(articles) - stats["resumed_from"]:
+        clear_checkpoint(output_path)
+        if verbose:
+            logger.info("Fetch complete, checkpoint cleared")
+
+    # Update workspace source record
+    if workspace:
+        workspace.update_source_record("chemrxiv", stats["converted"])
 
     if verbose:
         logger.info(

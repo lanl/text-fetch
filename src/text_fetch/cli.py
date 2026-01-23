@@ -1486,6 +1486,16 @@ def chemrxiv(ctx: click.Context) -> None:
     help="Add results to workspace (enables cross-search deduplication)",
 )
 @click.option("--grobid-url", help="GROBID service URL (required)")
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoint if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -1501,6 +1511,8 @@ def chemrxiv_fetch(
     out: str,
     workspace: str | None,
     grobid_url: str | None,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -1525,12 +1537,22 @@ def chemrxiv_fetch(
 
         # Add to workspace for deduplication
         text-fetch chemrxiv fetch --term "catalysis" --workspace ./my-corpus --out ./output
+
+        # Resume interrupted fetch
+        text-fetch chemrxiv fetch --term "catalysis" --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch chemrxiv fetch --term "catalysis" --workspace ./my-corpus --update
     """
     import logging
     import sys
 
     from .chemrxiv import fetch_chemrxiv, get_category_ids
     from .workspace import Workspace
+
+    # Validate update flag
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     config = ctx.obj["config"]
     resolved_grobid = get_grobid_url(cli_value=grobid_url, config=config)
@@ -1578,6 +1600,8 @@ def chemrxiv_fetch(
             max_results=max_results,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
@@ -1607,6 +1631,8 @@ def chemrxiv_fetch(
     click.echo(f"  Converted: {stats['converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("resumed_from"):
+        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
     if stats.get("duplicates_skipped"):
         click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
