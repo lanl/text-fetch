@@ -11,9 +11,12 @@ import logging
 from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .query import SearchConfig
+
+if TYPE_CHECKING:
+    from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ logger = logging.getLogger(__name__)
 def unified_fetch(
     config: SearchConfig,
     output_dir: str | Path,
+    workspace: Workspace | None = None,
     email: str | None = None,
     api_key: str | None = None,
     grobid_url: str | None = None,
@@ -31,7 +35,8 @@ def unified_fetch(
 
     Args:
         config: SearchConfig with sources and query parameters.
-        output_dir: Base output directory.
+        output_dir: Base output directory (used if workspace is None).
+        workspace: Optional workspace for deduplication and output.
         email: NCBI email (required for pmc source).
         api_key: NCBI API key (optional).
         grobid_url: GROBID URL (required for arxiv, chemrxiv).
@@ -41,8 +46,12 @@ def unified_fetch(
     Returns:
         Statistics dict with per-source stats and deduplication info.
     """
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # When workspace is used, deduplication is automatic via DOI index
+    if workspace:
+        output_path = workspace.path
+    else:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
 
     sources = config.sources or ["pmc"]  # Default to PMC
 
@@ -55,18 +64,22 @@ def unified_fetch(
         "total_incomplete": 0,
         "total_errors": 0,
         "duplicates_removed": 0,
+        "duplicates_skipped": 0,
         "unique_dois": [],
     }
 
     # Fetch from each source
     for source in sources:
-        source_dir = output_path / source
+        # When using workspace, all files go to workspace dirs
+        # When not using workspace, create source subdirs
+        source_dir = output_path if workspace else (output_path / source)
 
         try:
             source_stats = _fetch_from_source(
                 source=source,
                 config=config,
                 output_dir=source_dir,
+                workspace=workspace,
                 email=email,
                 api_key=api_key,
                 grobid_url=grobid_url,
@@ -78,19 +91,22 @@ def unified_fetch(
             stats["total_valid"] += source_stats.get("valid", 0)
             stats["total_incomplete"] += source_stats.get("incomplete", 0)
             stats["total_errors"] += source_stats.get("errors", 0)
+            stats["duplicates_skipped"] += source_stats.get("duplicates_skipped", 0)
         except Exception as e:
             logger.error("Error fetching from %s: %s", source, e)
             stats["per_source"][source] = {"error": str(e)}
             stats["total_errors"] += 1
 
-    # Deduplicate by DOI if requested
-    if config.deduplicate_by_doi:
+    # Deduplicate by DOI if requested (only if not using workspace)
+    # Workspace handles deduplication via DOI index automatically
+    if not workspace and config.deduplicate_by_doi:
         dedup_stats = deduplicate_by_doi(output_path)
         stats["duplicates_removed"] = dedup_stats["removed"]
         stats["unique_dois"] = dedup_stats["unique_dois"]
 
-    # Write unified manifest
-    _write_unified_manifest(output_path, stats, config)
+    # Write unified manifest (only if not using workspace)
+    if not workspace:
+        _write_unified_manifest(output_path, stats, config)
 
     return stats
 
@@ -99,6 +115,7 @@ def _fetch_from_source(
     source: str,
     config: SearchConfig,
     output_dir: Path,
+    workspace: Workspace | None,
     email: str | None,
     api_key: str | None,
     grobid_url: str | None,
@@ -120,6 +137,7 @@ def _fetch_from_source(
             email=email or "",
             api_key=api_key,
             output_dir=output_dir,
+            workspace=workspace,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
         )
@@ -130,6 +148,7 @@ def _fetch_from_source(
         return fetch_europepmc(
             query=config.to_europepmc_query(),
             output_dir=output_dir,
+            workspace=workspace,
             max_results=max_results,
             open_access_only=config.open_access_only,
             verbose=verbose,
@@ -145,6 +164,7 @@ def _fetch_from_source(
         return fetch_arxiv(
             config=config,
             output_dir=output_dir,
+            workspace=workspace,
             grobid_url=grobid_url,
             max_results=max_results,
             verbose=verbose,
@@ -159,6 +179,7 @@ def _fetch_from_source(
 
         return fetch_fn(
             output_dir=output_dir,
+            workspace=workspace,
             grobid_url=grobid_url,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
@@ -174,6 +195,7 @@ def _fetch_from_source(
         params = config.to_chemrxiv_params()
         return fetch_chemrxiv(
             output_dir=output_dir,
+            workspace=workspace,
             grobid_url=grobid_url,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
