@@ -1,6 +1,6 @@
 """text-fetch: Acquire scientific literature for RAG pipelines."""
 
-__version__ = "0.1.9"
+__version__ = "0.2.0"
 
 from .biorxiv import (
     BIORXIV_CATEGORIES,
@@ -46,6 +46,13 @@ from .query import (
     SearchConfigError,
     SourceOptions,
 )
+from .workspace import (
+    DOIIndex,
+    SearchRecord,
+    Workspace,
+    WorkspaceError,
+    WorkspaceManifest,
+)
 
 __all__ = [
     "ALL_SOURCES",
@@ -79,4 +86,10 @@ __all__ = [
     "process_pdf_batch",
     "read_tarball_provenance",
     "unified_fetch",
+    # Workspace
+    "DOIIndex",
+    "SearchRecord",
+    "Workspace",
+    "WorkspaceError",
+    "WorkspaceManifest",
 ]
