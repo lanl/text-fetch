@@ -24,11 +24,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from .common import RateLimiter
+
+if TYPE_CHECKING:
+    from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +406,7 @@ def fetch_europepmc(
     date_to: str | None = None,
     pmcids: list[str] | None = None,
     output_dir: str | Path = "europepmc_output",
+    workspace: Workspace | None = None,
     max_results: int = 100,
     open_access_only: bool = True,
     verbose: bool = False,
@@ -423,7 +427,8 @@ def fetch_europepmc(
         date_from: Start date (YYYY-MM-DD).
         date_to: End date (YYYY-MM-DD).
         pmcids: Alternative - list of PMC IDs to fetch directly.
-        output_dir: Output directory.
+        output_dir: Output directory (used if workspace is None).
+        workspace: Optional workspace for deduplication and output.
         max_results: Maximum articles to fetch.
         open_access_only: Only fetch open access articles.
         verbose: Enable verbose logging.
@@ -438,12 +443,19 @@ def fetch_europepmc(
         - valid: Number passing validation
         - incomplete: Number incomplete
         - skipped: Number skipped (duplicates)
+        - duplicates_skipped: Number of DOI duplicates (workspace mode)
         - errors: Number of errors
     """
     from .pmc import JATSValidator, save_pmc_article
 
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # Determine output path and search_id
+    if workspace:
+        search_id = workspace._get_next_search_id()
+        output_path = workspace.path
+    else:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        search_id = None
 
     # Initialize stats
     stats: dict[str, Any] = {
@@ -454,6 +466,7 @@ def fetch_europepmc(
         "valid": 0,
         "incomplete": 0,
         "skipped": 0,
+        "duplicates_skipped": 0,
         "errors": 0,
     }
 
@@ -512,6 +525,12 @@ def fetch_europepmc(
         if progress_callback:
             progress_callback(article_pmcid, i, total)
 
+        # Check for duplicate DOI in workspace
+        if workspace and article.doi and workspace.has_doi(article.doi):
+            logger.debug("Skipping duplicate DOI: %s", article.doi)
+            stats["duplicates_skipped"] += 1
+            continue
+
         try:
             # Download full-text XML
             xml_content = client.get_full_text_xml(article_pmcid)
@@ -520,15 +539,31 @@ def fetch_europepmc(
                 continue
             stats["fetched"] += 1
 
-            # Save with validation
-            _saved_path, result, _entry = save_pmc_article(
-                pmcid=article_pmcid,
-                xml_content=xml_content,
-                output_dir=output_path,
-                validator=validator,
-            )
+            # Validate content
+            result = validator.validate(xml_content)
+            is_valid = result.status.value == "valid"
 
-            if result.status.value == "valid":
+            # Save to appropriate location
+            if workspace:
+                # Use workspace to save file (handles DOI indexing)
+                workspace.add_file(
+                    jats_content=xml_content,
+                    doi=article.doi,
+                    source="europepmc",
+                    search_id=search_id or "",
+                    is_valid=is_valid,
+                    filename=f"{article_pmcid}.xml",
+                )
+            else:
+                # Save with standard method
+                _saved_path, result, _entry = save_pmc_article(
+                    pmcid=article_pmcid,
+                    xml_content=xml_content,
+                    output_dir=output_path,
+                    validator=validator,
+                )
+
+            if is_valid:
                 stats["valid"] += 1
             else:
                 stats["incomplete"] += 1

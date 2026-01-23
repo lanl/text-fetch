@@ -1106,6 +1106,11 @@ def europepmc(ctx: click.Context) -> None:
 @click.option("--max-results", default=100, help="Maximum results")
 @click.option("--include-non-oa", is_flag=True, help="Include non-open-access")
 @click.option("--out", required=True, help="Output directory")
+@click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -1121,6 +1126,7 @@ def europepmc_fetch(
     max_results: int,
     include_non_oa: bool,
     out: str,
+    workspace: str | None,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -1145,13 +1151,26 @@ def europepmc_fetch(
 
         # Specific PMC IDs
         text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --out ./output
     """
     import logging
+    import sys
 
     from .europepmc import fetch_europepmc
+    from .workspace import Workspace
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
+
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
 
     # Progress bar
     progress_bar = None
@@ -1177,6 +1196,7 @@ def europepmc_fetch(
             date_to=date_to,
             pmcids=list(pmcid) if pmcid else None,
             output_dir=out,
+            workspace=ws,
             max_results=max_results,
             open_access_only=not include_non_oa,
             verbose=verbose,
@@ -1186,6 +1206,28 @@ def europepmc_fetch(
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
 
+    # Record search in workspace
+    if ws:
+        # Build command string
+        cmd = " ".join(sys.argv)
+        # Build config dict for recording
+        search_config = {
+            "source": "europepmc",
+            "query": query,
+            "author": author,
+            "keywords": list(keyword) if keyword else None,
+            "date_from": date_from,
+            "date_to": date_to,
+            "pmcids": list(pmcid) if pmcid else None,
+            "max_results": max_results,
+            "open_access_only": not include_non_oa,
+        }
+        ws.record_search(
+            config=search_config,
+            command=cmd,
+            stats=stats,
+        )
+
     # Summary
     click.echo("\n" + "=" * 50)
     click.echo("Fetch complete!")
@@ -1194,21 +1236,31 @@ def europepmc_fetch(
     click.echo(f"  Downloaded: {stats['fetched']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("duplicates_skipped"):
+        click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
-    click.echo(f"\nOutput: {out}/")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
 
-    # Create tarball if requested
-    cmd = f"text-fetch europepmc fetch --author '{author or ''}' --out {out}"
-    _handle_tarball_creation(
-        output_dir=out,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=stats,
-        search_config_dict=None,
-        command=cmd,
-        source="europepmc",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        cmd = f"text-fetch europepmc fetch --author '{author or ''}' --out {out}"
+        _handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict=None,
+            command=cmd,
+            source="europepmc",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @cli.command(name="fetch")
