@@ -74,6 +74,7 @@ text-fetch/
 │   ├── common.py         # Shared utilities (RateLimiter, clean, sha1_of_file)
 │   ├── fetch.py          # Unified multi-source fetch orchestrator (v0.1.6)
 │   ├── query.py          # SearchConfig and query builders
+│   ├── workspace.py      # Workspace corpus management (v0.2.0)
 │   ├── grobid.py         # GROBIDClient for PDF→TEI→JATS
 │   ├── ncbi.py           # NCBIClient for E-utilities
 │   ├── pmc.py            # PMC fetching and JATS validation
@@ -82,9 +83,12 @@ text-fetch/
 │   ├── arxiv.py          # ArxivClient and fetch_arxiv orchestrator
 │   ├── biorxiv.py        # BiorxivClient for bioRxiv/medRxiv (v0.1.3)
 │   ├── chemrxiv.py       # ChemrxivClient for ChemRxiv (v0.1.4)
-│   └── pdf.py            # Legacy PDF processing functions
-├── pdf_to_jats.py        # Legacy standalone script
-├── tei2jats.xsl          # XSLT stylesheet
+│   ├── pdf.py            # PDF batch processing via GROBID
+│   └── data/
+│       └── tei2jats.xsl  # TEI→JATS XSLT stylesheet
+├── scripts/
+│   ├── start_grobid.sh   # GROBID Docker startup script
+│   └── legacy/           # Archived legacy scripts
 ├── tests/                # Test suite
 └── docs/                 # Documentation
 ```
@@ -309,6 +313,56 @@ def unified_fetch(config, output_dir, ...) -> dict[str, Any]:
 def deduplicate_by_doi(output_dir) -> dict[str, Any]:
     """Remove duplicate DOIs across sources."""
     ...
+```
+
+### Workspace (`workspace.py`)
+
+Corpus workspace management with cross-search deduplication (v0.2.0):
+
+```python
+@dataclass
+class WorkspaceManifest:
+    """Workspace metadata."""
+    version: str = "1.0"
+    created: str = ""
+    updated: str = ""
+    name: str = ""
+    statistics: dict[str, int] = field(default_factory=dict)
+
+class DOIIndex:
+    """Fast DOI lookup for deduplication."""
+    def contains(self, doi: str) -> bool: ...
+    def add(self, doi: str, file_path: str, source: str, search_id: str) -> None: ...
+    def remove(self, doi: str) -> None: ...
+
+class Workspace:
+    """Manages a corpus workspace directory."""
+    @classmethod
+    def init(cls, path: Path, name: str | None = None) -> "Workspace": ...
+    @classmethod
+    def load(cls, path: Path) -> "Workspace": ...
+    @classmethod
+    def load_or_init(cls, path: Path, name: str | None = None) -> "Workspace": ...
+    
+    def has_doi(self, doi: str) -> bool: ...
+    def add_file(self, jats_content: str, doi: str | None, source: str, 
+                 search_id: str, is_valid: bool) -> Path | None: ...
+    def record_search(self, config: dict, command: str, stats: dict) -> str: ...
+    def build_tarball(self, output_path: Path, include_incomplete: bool = False) -> dict: ...
+```
+
+**Workspace directory structure:**
+```
+my-corpus/
+├── .text-fetch/
+│   ├── workspace.json     # Workspace manifest
+│   ├── searches/          # Search history
+│   │   ├── search_001.json
+│   │   └── search_002.json
+│   └── doi_index.json     # DOI → location mapping
+├── valid/                 # Complete JATS files
+├── incomplete/            # Incomplete JATS files
+└── manifest.json          # Standard manifest
 ```
 
 ## JATS Validation

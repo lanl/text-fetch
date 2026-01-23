@@ -97,30 +97,42 @@ curl http://localhost:8070/api/isalive
 text-fetch/
 ├── src/
 │   └── text_fetch/
-│       ├── __init__.py       # Package init with version
-│       ├── cli.py            # Entry point (thin dispatcher)
-│       ├── pdf.py            # PDF processing via GROBID
-│       ├── pmc.py            # PubMed Central fetching
-│       ├── ncbi.py           # NCBI E-utilities wrapper
-│       ├── query.py          # JSON config → query builder
-│       └── common.py         # Shared utilities
-├── tei2jats.xsl              # TEI→JATS XSLT stylesheet
+│       ├── __init__.py       # Package exports with version
+│       ├── cli.py            # Click-based CLI (thin dispatcher)
+│       ├── config.py         # TOML configuration handling
+│       ├── common.py         # Shared utilities (RateLimiter, etc.)
+│       ├── fetch.py          # Unified multi-source fetch orchestrator
+│       ├── query.py          # SearchConfig and query builders
+│       ├── workspace.py      # Workspace corpus management (v0.2.0)
+│       ├── grobid.py         # GROBIDClient for PDF→TEI→JATS
+│       ├── ncbi.py           # NCBIClient for E-utilities
+│       ├── pmc.py            # PMC fetching and JATS validation
+│       ├── pmc_oa.py         # PMC Open Access corpus sync
+│       ├── europepmc.py      # EuropePMCClient for Europe PMC
+│       ├── arxiv.py          # ArxivClient and fetch_arxiv
+│       ├── biorxiv.py        # BiorxivClient for bioRxiv/medRxiv
+│       ├── chemrxiv.py       # ChemrxivClient for ChemRxiv
+│       ├── pdf.py            # PDF batch processing via GROBID
+│       └── data/
+│           └── tei2jats.xsl  # TEI→JATS XSLT stylesheet
+├── scripts/
+│   ├── start_grobid.sh       # GROBID Docker startup script
+│   └── legacy/               # Archived legacy scripts
 ├── pyproject.toml            # Project metadata and dependencies
-├── requirements.txt          # Pip-compatible dependencies
 ├── .pre-commit-config.yaml   # Pre-commit hook configuration
+├── text-fetch.example.toml   # Example configuration file
 ├── CHANGELOG.md              # Version history
 ├── README.md                 # User documentation
 ├── docs/
 │   ├── ROADMAP.md            # Development roadmap
 │   ├── ARCHITECTURE.md       # System design
 │   ├── DEVELOPER_GUIDE.md    # This file
-│   └── v0.1.1-plan.md        # Implementation plan
+│   ├── API_REFERENCE.md      # Python API documentation
+│   └── v0.x.x-plan.md        # Implementation plans per version
 ├── tests/                    # Test suite
 │   ├── conftest.py           # Pytest fixtures
 │   └── test_*.py             # Test modules
-├── input/                    # Search configs (gitignored)
-├── tei_cache/                # TEI cache (gitignored)
-└── jats_cache/               # JATS cache (gitignored)
+└── Manuscripts/              # Local PDF test files (gitignored)
 ```
 
 ### CLI Architecture Directive
