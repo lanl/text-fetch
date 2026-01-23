@@ -413,6 +413,8 @@ def fetch_europepmc(
     open_access_only: bool = True,
     verbose: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch Europe PMC articles and save as JATS.
 
@@ -435,6 +437,8 @@ def fetch_europepmc(
         open_access_only: Only fetch open access articles.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(pmcid, current, total).
+        resume: Resume from checkpoint if available.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dict with:
@@ -447,7 +451,14 @@ def fetch_europepmc(
         - skipped: Number skipped (duplicates)
         - duplicates_skipped: Number of DOI duplicates (workspace mode)
         - errors: Number of errors
+        - resumed_from: Number of papers already completed (if resumed)
     """
+    from .checkpoint import (
+        FetchCheckpoint,
+        clear_checkpoint,
+        get_checkpoint_path,
+        load_checkpoint_if_exists,
+    )
     from .pmc import JATSValidator, save_pmc_article
 
     # Determine output path and search_id
@@ -458,6 +469,21 @@ def fetch_europepmc(
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         search_id = None
+
+    # Handle update mode - adjust date_from based on last fetch
+    effective_date_from = date_from
+    if update and workspace:
+        last_fetch = workspace.get_last_fetch_date("europepmc")
+        if last_fetch:
+            # Use last fetch date as start date (subtract 1 day for safety)
+            effective_date_from = last_fetch
+            if verbose:
+                logger.info("Update mode: fetching papers since %s", last_fetch)
+        else:
+            if verbose:
+                logger.info(
+                    "Update mode: no previous fetch, proceeding with full fetch"
+                )
 
     # Initialize stats
     stats: dict[str, Any] = {
@@ -470,6 +496,7 @@ def fetch_europepmc(
         "skipped": 0,
         "duplicates_skipped": 0,
         "errors": 0,
+        "resumed_from": 0,
     }
 
     client = EuropePMCClient()
@@ -489,7 +516,7 @@ def fetch_europepmc(
             query = EuropePMCClient.build_query(
                 author=author,
                 keywords=keywords,
-                date_from=date_from,
+                date_from=effective_date_from,
                 date_to=date_to,
                 open_access_only=open_access_only,
                 has_full_text=True,
@@ -512,7 +539,50 @@ def fetch_europepmc(
         logger.info("%d have full-text available", len(fetchable))
 
     if not fetchable:
+        # Update workspace source record even if no results
+        if workspace:
+            workspace.update_source_record("europepmc", 0)
         return stats
+
+    # Build config for checkpoint
+    fetch_config = {
+        "query": query,
+        "author": author,
+        "keywords": keywords,
+        "date_from": effective_date_from,
+        "date_to": date_to,
+        "pmcids": pmcids,
+        "max_results": max_results,
+        "open_access_only": open_access_only,
+    }
+
+    # Load or create checkpoint
+    checkpoint = None
+    checkpoint_path = get_checkpoint_path(output_path)
+
+    if resume:
+        checkpoint = load_checkpoint_if_exists(output_path)
+        if checkpoint:
+            # Validate config hasn't changed
+            if not checkpoint.validate_config(fetch_config):
+                logger.warning("Config changed since checkpoint. Starting fresh.")
+                checkpoint = None
+            else:
+                stats["resumed_from"] = len(checkpoint.completed)
+                if verbose:
+                    logger.info(
+                        "Resuming from checkpoint: %d completed",
+                        len(checkpoint.completed),
+                    )
+
+    if checkpoint is None:
+        checkpoint = FetchCheckpoint.create(
+            config=fetch_config,
+            source="europepmc",
+            total_expected=len(fetchable),
+            output_path=output_path,
+        )
+        checkpoint.reset_save_tracking()
 
     # Process articles
     validator = JATSValidator()
@@ -527,11 +597,18 @@ def fetch_europepmc(
         if progress_callback:
             progress_callback(article_pmcid, i, total)
 
+        # Skip if already completed in checkpoint
+        if checkpoint.is_complete(article_pmcid):
+            stats["skipped"] += 1
+            continue
+
         # Check for duplicate DOI in workspace
         if workspace and article.doi and workspace.has_doi(article.doi):
             logger.debug("Skipping duplicate DOI: %s", article.doi)
             workspace.record_duplicate_skip(article.doi)
             stats["duplicates_skipped"] += 1
+            # Mark as complete in checkpoint to avoid retry
+            checkpoint.mark_complete(article_pmcid)
             continue
 
         try:
@@ -571,9 +648,32 @@ def fetch_europepmc(
             else:
                 stats["incomplete"] += 1
 
+            # Mark complete and save checkpoint periodically
+            checkpoint.mark_complete(article_pmcid)
+            checkpoint.save_if_needed(checkpoint_path)
+
         except Exception as e:
             logger.error("Error processing %s: %s", article_pmcid, e)
             stats["errors"] += 1
+            checkpoint.mark_failed(article_pmcid, str(e))
+            checkpoint.save_if_needed(checkpoint_path)
+
+    # Final checkpoint save and cleanup
+    checkpoint.save(checkpoint_path)
+
+    # Clear checkpoint on successful completion (all attempted)
+    attempted = stats["fetched"] + stats["errors"] + stats["duplicates_skipped"]
+    if attempted >= len(fetchable) - stats["resumed_from"]:
+        clear_checkpoint(output_path)
+        if verbose:
+            logger.info("Fetch complete, checkpoint cleared")
+
+    # Update workspace source record
+    if workspace:
+        workspace.update_source_record(
+            "europepmc",
+            stats["fetched"],
+        )
 
     if verbose:
         logger.info(

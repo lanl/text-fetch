@@ -1578,6 +1578,16 @@ def europepmc(ctx: click.Context) -> None:
     type=click.Path(),
     help="Add results to workspace (enables cross-search deduplication)",
 )
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoint if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -1594,6 +1604,8 @@ def europepmc_fetch(
     include_non_oa: bool,
     out: str,
     workspace: str | None,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -1621,12 +1633,22 @@ def europepmc_fetch(
 
         # Add to workspace for deduplication
         text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --out ./output
+
+        # Resume interrupted fetch
+        text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
     """
     import logging
     import sys
 
     from .europepmc import fetch_europepmc
     from .workspace import Workspace
+
+    # Validate update flag
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -1668,6 +1690,8 @@ def europepmc_fetch(
             open_access_only=not include_non_oa,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
     finally:
         if progress_bar is not None:
@@ -1703,6 +1727,8 @@ def europepmc_fetch(
     click.echo(f"  Downloaded: {stats['fetched']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("resumed_from"):
+        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
     if stats.get("duplicates_skipped"):
         click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
