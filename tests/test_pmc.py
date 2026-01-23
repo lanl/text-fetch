@@ -309,6 +309,63 @@ for the body validation check to pass successfully.</p></body>
         assert result.status == ValidationStatus.INVALID
         assert any("file read error" in e.lower() for e in result.errors)
 
+    def test_validate_jats_namespaced_xml(self):
+        """JATS-namespaced XML (from GROBID) is validated correctly."""
+        # GROBID produces JATS with namespace prefix j:
+        # This must be detected properly
+        namespaced_jats = """<?xml version="1.0" encoding="UTF-8"?>
+<j:article xmlns:j="http://jats.nlm.nih.gov" article-type="research-article">
+  <j:front>
+    <j:article-meta>
+      <j:title-group>
+        <j:article-title>Namespaced Article Title</j:article-title>
+      </j:title-group>
+      <j:abstract>
+        <j:sec>
+          <j:p>This is the abstract text with namespace prefix.</j:p>
+        </j:sec>
+      </j:abstract>
+    </j:article-meta>
+  </j:front>
+  <j:body>
+    <j:sec>
+      <j:title>Introduction</j:title>
+      <j:p>This is body content that needs to be long enough.
+      We need at least 1000 characters of body content here.
+      Adding more text to ensure we reach that minimum requirement.
+      Lorem ipsum dolor sit amet consectetur adipiscing elit.
+      Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+      Ut enim ad minim veniam quis nostrud exercitation ullamco laboris.
+      Nisi ut aliquip ex ea commodo consequat duis aute irure dolor.
+      In reprehenderit in voluptate velit esse cillum dolore eu fugiat.
+      Nulla pariatur excepteur sint occaecat cupidatat non proident.
+      Sunt in culpa qui officia deserunt mollit anim id est laborum.
+      More content to reach the threshold for body validation.
+      Sed ut perspiciatis unde omnis iste natus error sit voluptatem.
+      Accusantium doloremque laudantium totam rem aperiam eaque ipsa.
+      Quae ab illo inventore veritatis et quasi architecto beatae vitae.
+      Dicta sunt explicabo nemo enim ipsam voluptatem quia voluptas.
+      Sit aspernatur aut odit aut fugit sed quia consequuntur magni.
+      Dolores eos qui ratione voluptatem sequi nesciunt neque porro.
+      Quisquam est qui dolorem ipsum quia dolor sit amet consectetur.
+      Adipisci velit sed quia non numquam eius modi tempora incidunt.</j:p>
+    </j:sec>
+  </j:body>
+</j:article>"""
+
+        validator = JATSValidator()
+        result = validator.validate(namespaced_jats)
+
+        assert result.has_title is True, "Should detect j:article-title"
+        assert result.has_abstract is True, "Should detect j:abstract"
+        assert (
+            result.has_body is True
+        ), f"Should detect j:body (got {result.body_chars} chars)"
+        assert (
+            result.body_chars >= 1000
+        ), f"Body should have enough content: {result.body_chars}"
+        assert result.status == ValidationStatus.VALID, f"Errors: {result.errors}"
+
 
 class TestComputeSha256:
     """Tests for compute_sha256 function."""

@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 # Minimum body content threshold (characters) for "valid" status
 BODY_MIN_CHARS = 1000
 
+# JATS namespace - used in GROBID-generated files
+JATS_NS = "http://jats.nlm.nih.gov"
+
 
 class ValidationStatus(Enum):
     """JATS document validation status."""
@@ -201,7 +204,8 @@ class JATSValidator:
             Tuple of (has_valid_title, title_text).
         """
         # Try to find article-title anywhere in document
-        for title_el in root.iter("article-title"):
+        # Check both non-namespaced and JATS-namespaced elements
+        for title_el in self._iter_element(root, "article-title"):
             text = self._get_all_text(title_el)
             if text:
                 return True, text
@@ -213,7 +217,8 @@ class JATSValidator:
         Returns:
             Tuple of (has_valid_abstract, abstract_text).
         """
-        for abstract_el in root.iter("abstract"):
+        # Check both non-namespaced and JATS-namespaced elements
+        for abstract_el in self._iter_element(root, "abstract"):
             text = self._get_all_text(abstract_el)
             if text:
                 return True, text
@@ -226,12 +231,38 @@ class JATSValidator:
             Tuple of (has_valid_body, body_char_count).
         """
         total_chars = 0
-        for body_el in root.iter("body"):
+        # Check both non-namespaced and JATS-namespaced elements
+        for body_el in self._iter_element(root, "body"):
             text = self._get_all_text(body_el)
             total_chars += len(text)
 
         has_valid_body = total_chars >= self.body_min_chars
         return has_valid_body, total_chars
+
+    def _iter_element(self, root: ET.Element, tag: str) -> list[ET.Element]:
+        """Find elements by tag name, handling both namespaced and non-namespaced.
+
+        Searches for:
+        1. Non-namespaced: <tag>
+        2. JATS-namespaced: <j:tag> or {http://jats.nlm.nih.gov}tag
+
+        Args:
+            root: Root element to search from.
+            tag: Local tag name (e.g., "article-title").
+
+        Returns:
+            List of matching elements.
+        """
+        elements: list[ET.Element] = []
+
+        # 1. Try non-namespaced
+        elements.extend(root.iter(tag))
+
+        # 2. Try JATS namespace
+        namespaced_tag = f"{{{JATS_NS}}}{tag}"
+        elements.extend(root.iter(namespaced_tag))
+
+        return elements
 
     def _get_all_text(self, element: ET.Element) -> str:
         """Extract all text content from element and descendants.
