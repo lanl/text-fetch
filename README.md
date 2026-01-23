@@ -64,6 +64,12 @@ Fetch articles by PubMed query:
 
 ```bash
 text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output
+
+# Resume interrupted fetch
+text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch (requires workspace)
+text-fetch pmc fetch --query "hlavacek ws[author]" --workspace ./my-corpus --update
 ```
 
 #### Sync PMC Open Access Corpus
@@ -165,6 +171,12 @@ text-fetch arxiv fetch --categories q-bio.MN --categories cs.AI --out ./output
 
 # Using JSON config
 text-fetch arxiv fetch --config-file input/search.json --out ./output
+
+# Resume interrupted fetch
+text-fetch arxiv fetch --categories q-bio.MN --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch
+text-fetch arxiv fetch --categories q-bio.MN --workspace ./my-corpus --update
 ```
 
 ### bioRxiv
@@ -183,6 +195,12 @@ text-fetch biorxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
 
 # Multiple DOIs
 text-fetch biorxiv fetch --doi 10.1101/2024.01.15.111111 --doi 10.1101/2024.01.15.222222 --out ./output
+
+# Resume interrupted fetch
+text-fetch biorxiv fetch --days 30 --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch
+text-fetch biorxiv fetch --days 30 --workspace ./my-corpus --update
 ```
 
 **Categories:** See `BIORXIV_CATEGORIES` in the code for all 27 supported categories (e.g., `systems_biology`, `bioinformatics`, `genomics`).
@@ -200,6 +218,12 @@ text-fetch medrxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./o
 
 # Specific DOIs
 text-fetch medrxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+
+# Resume interrupted fetch
+text-fetch medrxiv fetch --days 30 --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch
+text-fetch medrxiv fetch --days 30 --workspace ./my-corpus --update
 ```
 
 **Categories:** See `MEDRXIV_CATEGORIES` in the code for all 52 supported categories (e.g., `epidemiology`, `infectious_diseases`, `public_and_global_health`).
@@ -226,6 +250,12 @@ text-fetch chemrxiv fetch --item-id item_2024-abc123 --out ./output
 
 # Combined filters
 text-fetch chemrxiv fetch --term "synthesis" --category organic_chemistry --max-results 50 --out ./output
+
+# Resume interrupted fetch
+text-fetch chemrxiv fetch --term "catalysis" --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch
+text-fetch chemrxiv fetch --term "catalysis" --workspace ./my-corpus --update
 ```
 
 **Categories:** See `CHEMRXIV_CATEGORIES` in the code for all 22 supported categories (e.g., `organic_chemistry`, `inorganic_chemistry`, `biochemistry`, `catalysis`).
@@ -252,6 +282,12 @@ text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 --out ./output
 
 # Include non-open-access results
 text-fetch europepmc fetch --author "smith" --include-non-oa --out ./output
+
+# Resume interrupted fetch
+text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch
+text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
 ```
 
 **Key advantages:**
@@ -284,6 +320,15 @@ text-fetch workspace clear ./my-corpus --keep-history
 
 # Full reset
 text-fetch workspace clear ./my-corpus --force
+
+# Update workspace: re-run searches to fetch new papers
+text-fetch workspace update ./my-corpus
+
+# Preview what would be fetched
+text-fetch workspace update ./my-corpus --dry-run
+
+# Update specific source only
+text-fetch workspace update ./my-corpus --source europepmc
 ```
 
 **Workspace directory structure:**
@@ -331,6 +376,12 @@ text-fetch fetch --config-file input/hlavacek.json --sources pmc,europepmc --out
 
 # Disable DOI deduplication
 text-fetch fetch --config-file input/hlavacek.json --no-dedupe --out ./output
+
+# Resume interrupted multi-source fetch
+text-fetch fetch --config-file input/hlavacek.json --out ./output --resume
+
+# Update mode: fetch only new papers since last fetch
+text-fetch fetch --config-file input/hlavacek.json --workspace ./my-corpus --update
 ```
 
 **Config options:**
@@ -596,6 +647,40 @@ This is useful for:
 - **Reproducing previous fetches** - Run the same search criteria again
 - **Updating corpora** - Re-fetch with the same config to get new articles
 - **Sharing search configs** - Tarball contains the exact search parameters used
+
+### Workflow 7: Incremental Corpus Updates (v0.2.4)
+
+Resume interrupted fetches and update existing corpora with new papers:
+
+```bash
+# Scenario 1: Resume interrupted fetch
+# Your laptop went to sleep during a large fetch - resume where you left off
+text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
+# "Resumed from: 127 completed, continuing..."
+
+# Scenario 2: Update existing workspace
+# You built a corpus 3 months ago, now want only new papers since then
+text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
+# "Checking for papers since 2025-10-23..."
+
+# Scenario 3: Update all sources in workspace
+text-fetch workspace update ./my-corpus
+# "europepmc: 15 new papers"
+# "biorxiv: 8 new papers"
+# "Total: 23 new papers added"
+
+# Preview updates without downloading
+text-fetch workspace update ./my-corpus --dry-run
+
+# Update specific source only
+text-fetch workspace update ./my-corpus --source arxiv --grobid-url http://localhost:8070
+```
+
+**Key features:**
+- **Checkpoint-based resume** - Progress saved every 10 papers or 30 seconds
+- **Per-source tracking** - Each source tracks its last fetch date independently
+- **Config validation** - Changing search criteria resets the checkpoint
+- **Workspace integration** - `--update` requires `--workspace` for date tracking
 
 ## Development
 
