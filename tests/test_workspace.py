@@ -375,6 +375,38 @@ class TestWorkspace:
         stats = ws.get_statistics()
         assert stats["duplicates_skipped"] == 1
 
+    def test_record_duplicate_skip(self, tmp_path: Path) -> None:
+        """Test manually recording duplicate skips."""
+        ws_path = tmp_path / "corpus"
+        ws = Workspace.init(ws_path)
+
+        # Record skips without going through add_file
+        ws.record_duplicate_skip("10.1234/skip1")
+        ws.record_duplicate_skip("10.1234/skip2")
+        ws.record_duplicate_skip("10.1234/skip3")
+
+        stats = ws.get_statistics()
+        assert stats["duplicates_skipped"] == 3
+
+    def test_record_duplicate_skip_persists(self, tmp_path: Path) -> None:
+        """Test duplicate skip counter persists across sessions."""
+        ws_path = tmp_path / "corpus"
+
+        # Session 1: record skips
+        ws1 = Workspace.init(ws_path)
+        ws1.record_duplicate_skip("10.1234/skip1")
+        ws1.record_duplicate_skip("10.1234/skip2")
+
+        # Session 2: load and verify
+        ws2 = Workspace.load(ws_path)
+        stats = ws2.get_statistics()
+        assert stats["duplicates_skipped"] == 2
+
+        # Record more skips
+        ws2.record_duplicate_skip("10.1234/skip3")
+        stats2 = ws2.get_statistics()
+        assert stats2["duplicates_skipped"] == 3
+
     def test_add_file_no_doi(self, tmp_path: Path) -> None:
         """Test adding file without DOI."""
         ws_path = tmp_path / "corpus"
