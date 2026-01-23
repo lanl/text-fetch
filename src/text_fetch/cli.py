@@ -361,6 +361,16 @@ def pmc(ctx: click.Context) -> None:
     envvar="NCBI_API_KEY",
     help="NCBI API key (optional, for higher rate limits)",
 )
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoint if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -373,6 +383,8 @@ def pmc_fetch(
     workspace: str | None,
     email: str | None,
     api_key: str | None,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -389,6 +401,12 @@ def pmc_fetch(
 
         # Add to workspace for deduplication
         text-fetch pmc fetch --query "hlavacek ws[au]" --workspace ./my-corpus --out ./output
+
+        # Resume interrupted fetch
+        text-fetch pmc fetch --query "hlavacek ws[au]" --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch pmc fetch --query "hlavacek ws[au]" --workspace ./my-corpus --update
     """
     import logging
     import sys
@@ -399,6 +417,10 @@ def pmc_fetch(
 
     if not config_file and not query:
         raise click.UsageError("Either --config-file or --query is required")
+
+    # Validate update flag
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     config = ctx.obj["config"]
 
@@ -473,6 +495,8 @@ def pmc_fetch(
             workspace=ws,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
 
     finally:
@@ -498,6 +522,8 @@ def pmc_fetch(
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
     click.echo(f"  Skipped (duplicates): {stats['skipped']:,}")
+    if stats.get("resumed_from"):
+        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
     if stats.get("duplicates_skipped"):
         click.echo(f"  DOI duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")

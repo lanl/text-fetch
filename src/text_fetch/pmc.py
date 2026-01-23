@@ -26,6 +26,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from xml.etree import ElementTree as ET
 
+from .checkpoint import (
+    FetchCheckpoint,
+    clear_checkpoint,
+    get_checkpoint_path,
+    load_checkpoint_if_exists,
+)
+
 if TYPE_CHECKING:
     from .workspace import Workspace
 
@@ -439,6 +446,8 @@ def fetch_pmc(
     workspace: Workspace | None = None,
     verbose: bool = False,
     progress_callback: Any = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch PMC articles via PubMed search.
 
@@ -459,9 +468,12 @@ def fetch_pmc(
         workspace: Optional workspace for deduplication and output.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(pmcid, current, total).
+        resume: Resume from checkpoint if available.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dictionary with:
+        - source: "pmc"
         - query: The PubMed query used
         - pmids_found: Number of PMIDs from search
         - pmcids_available: Number with PMC full-text
@@ -471,6 +483,7 @@ def fetch_pmc(
         - errors: Number of errors
         - skipped: Number skipped (already in manifest)
         - duplicates_skipped: Number of DOI duplicates (workspace mode)
+        - resumed_from: Number already completed (if resumed)
 
     Raises:
         ValueError: If neither config nor query provided, or email missing.
@@ -501,9 +514,32 @@ def fetch_pmc(
         output_path.mkdir(parents=True, exist_ok=True)
         search_id = None
 
+    # Handle update mode - add date filter to query
+    effective_query = str(pubmed_query) if pubmed_query else ""
+    if update and workspace:
+        last_fetch = workspace.get_last_fetch_date("pmc")
+        if last_fetch:
+            # PubMed uses YYYY/MM/DD format for date filtering with [dp] qualifier
+            # Convert YYYY-MM-DD to YYYY/MM/DD
+            date_filter = last_fetch.replace("-", "/")
+            if effective_query:
+                effective_query = (
+                    f"({effective_query}) AND {date_filter}:3000/12/31[dp]"
+                )
+            else:
+                effective_query = f"{date_filter}:3000/12/31[dp]"
+            if verbose:
+                logger.info("Update mode: fetching papers since %s", last_fetch)
+        else:
+            if verbose:
+                logger.info(
+                    "Update mode: no previous fetch, proceeding with full fetch"
+                )
+
     # Initialize stats
     stats: dict[str, Any] = {
-        "query": pubmed_query,
+        "source": "pmc",
+        "query": effective_query,
         "pmids_found": 0,
         "pmcids_available": 0,
         "fetched": 0,
@@ -512,6 +548,7 @@ def fetch_pmc(
         "errors": 0,
         "skipped": 0,
         "duplicates_skipped": 0,
+        "resumed_from": 0,
     }
 
     # Load existing manifest for incremental updates (only if not using workspace)
@@ -519,14 +556,14 @@ def fetch_pmc(
     manifest = dict(existing_manifest)
 
     if verbose:
-        logger.info("Query: %s", pubmed_query)
+        logger.info("Query: %s", effective_query)
 
     # Create NCBI client
     with NCBIClient(email=email, api_key=api_key) as client:
         # Step 1: Search PubMed
         if verbose:
             logger.info("Searching PubMed...")
-        pmids = client.esearch_ids(str(pubmed_query))
+        pmids = client.esearch_ids(effective_query)
         stats["pmids_found"] = len(pmids)
 
         if verbose:
@@ -534,7 +571,11 @@ def fetch_pmc(
 
         if not pmids:
             if not workspace:
-                write_manifest(output_path, manifest, metadata={"query": pubmed_query})
+                write_manifest(
+                    output_path, manifest, metadata={"query": effective_query}
+                )
+            if workspace:
+                workspace.update_source_record("pmc", 0)
             return stats
 
         # Step 2: Convert PMIDs to PMCIDs
@@ -552,8 +593,45 @@ def fetch_pmc(
 
         if not pmcid_map:
             if not workspace:
-                write_manifest(output_path, manifest, metadata={"query": pubmed_query})
+                write_manifest(
+                    output_path, manifest, metadata={"query": effective_query}
+                )
+            if workspace:
+                workspace.update_source_record("pmc", 0)
             return stats
+
+        # Build config for checkpoint
+        fetch_config = {
+            "query": effective_query,
+        }
+
+        # Load or create checkpoint
+        checkpoint: FetchCheckpoint | None = None
+        checkpoint_path = get_checkpoint_path(output_path)
+
+        if resume:
+            checkpoint = load_checkpoint_if_exists(output_path)
+            if checkpoint:
+                # Validate config hasn't changed
+                if not checkpoint.validate_config(fetch_config):
+                    logger.warning("Config changed since checkpoint. Starting fresh.")
+                    checkpoint = None
+                else:
+                    stats["resumed_from"] = len(checkpoint.completed)
+                    if verbose:
+                        logger.info(
+                            "Resuming from checkpoint: %d completed",
+                            len(checkpoint.completed),
+                        )
+
+        if checkpoint is None:
+            checkpoint = FetchCheckpoint.create(
+                config=fetch_config,
+                source="pmc",
+                total_expected=len(pmcid_map),
+                output_path=output_path,
+            )
+            checkpoint.reset_save_tracking()
 
         # Step 3: Fetch and save each article
         validator = JATSValidator()
@@ -564,12 +642,19 @@ def fetch_pmc(
             if progress_callback:
                 progress_callback(pmcid, i, total)
 
+            # Skip if already completed in checkpoint
+            if checkpoint.is_complete(pmcid):
+                stats["skipped"] += 1
+                continue
+
             try:
                 # Fetch XML
                 xml_content = client.fetch_pmc_xml(pmcid)
 
                 if xml_content is None:
                     stats["errors"] += 1
+                    checkpoint.mark_failed(pmcid, "Failed to fetch XML")
+                    checkpoint.save_if_needed(checkpoint_path)
                     continue
 
                 # Extract DOI for workspace deduplication
@@ -580,6 +665,8 @@ def fetch_pmc(
                     logger.debug("Skipping duplicate DOI: %s", doi)
                     workspace.record_duplicate_skip(doi)
                     stats["duplicates_skipped"] += 1
+                    # Mark as complete in checkpoint to avoid retry
+                    checkpoint.mark_complete(pmcid)
                     continue
 
                 # Validate content
@@ -624,13 +711,33 @@ def fetch_pmc(
                         else:
                             stats["incomplete"] += 1
 
+                # Mark complete and save checkpoint periodically
+                checkpoint.mark_complete(pmcid)
+                checkpoint.save_if_needed(checkpoint_path)
+
             except Exception as e:
                 logger.error("Error fetching %s: %s", pmcid, e)
                 stats["errors"] += 1
+                checkpoint.mark_failed(pmcid, str(e))
+                checkpoint.save_if_needed(checkpoint_path)
+
+    # Final checkpoint save and cleanup
+    checkpoint.save(checkpoint_path)
+
+    # Clear checkpoint on successful completion (all attempted)
+    attempted = stats["fetched"] + stats["errors"] + stats["duplicates_skipped"]
+    if attempted >= len(pmcid_map) - stats["resumed_from"]:
+        clear_checkpoint(output_path)
+        if verbose:
+            logger.info("Fetch complete, checkpoint cleared")
 
     # Write final manifest (only if not using workspace)
     if not workspace:
-        write_manifest(output_path, manifest, metadata={"query": pubmed_query})
+        write_manifest(output_path, manifest, metadata={"query": effective_query})
+
+    # Update workspace source record
+    if workspace:
+        workspace.update_source_record("pmc", stats["fetched"])
 
     if verbose:
         logger.info(
