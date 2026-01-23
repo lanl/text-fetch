@@ -1484,6 +1484,11 @@ def europepmc_fetch(
     help="JSON search configuration file",
 )
 @click.option("--out", required=True, help="Output directory")
+@click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
 @click.option("--email", envvar="NCBI_EMAIL", help="Email for NCBI requests")
 @click.option("--api-key", envvar="NCBI_API_KEY", help="NCBI API key")
 @click.option("--grobid-url", help="GROBID service URL")
@@ -1500,6 +1505,7 @@ def unified_fetch_cmd(
     ctx: click.Context,
     config_file: str,
     out: str,
+    workspace: str | None,
     email: str | None,
     api_key: str | None,
     grobid_url: str | None,
@@ -1522,11 +1528,16 @@ def unified_fetch_cmd(
 
         # Disable deduplication
         text-fetch fetch --config-file input/search.json --no-dedupe --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch fetch --config-file input/search.json --workspace ./my-corpus --out ./output
     """
     import logging
+    import sys
 
     from .fetch import unified_fetch
     from .query import SearchConfig, SearchConfigError
+    from .workspace import Workspace
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -1544,6 +1555,14 @@ def unified_fetch_cmd(
     resolved_api_key = get_ncbi_api_key(cli_value=api_key, config=app_config)
     resolved_grobid = get_grobid_url(cli_value=grobid_url, config=app_config)
 
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
+
     # Load search config
     try:
         search_config = SearchConfig.from_json(config_file)
@@ -1554,8 +1573,8 @@ def unified_fetch_cmd(
     if sources:
         search_config.sources = sources.split(",")
 
-    # Override deduplication
-    if no_dedupe:
+    # Override deduplication (when using workspace, deduplication is automatic)
+    if no_dedupe and not ws:
         search_config.deduplicate_by_doi = False
 
     # Validate email if pmc source is used
@@ -1570,7 +1589,10 @@ def unified_fetch_cmd(
     click.echo(f"Config: {config_file}")
     click.echo(f"Sources: {', '.join(effective_sources)}")
     click.echo(f"Max per source: {search_config.max_results_per_source}")
-    click.echo(f"Deduplicate: {search_config.deduplicate_by_doi}")
+    if ws:
+        click.echo(f"Workspace: {ws.path} (auto-deduplication)")
+    else:
+        click.echo(f"Deduplicate: {search_config.deduplicate_by_doi}")
     click.echo()
 
     # Progress tracking
@@ -1598,6 +1620,7 @@ def unified_fetch_cmd(
         stats = unified_fetch(
             config=search_config,
             output_dir=out,
+            workspace=ws,
             email=resolved_email,
             api_key=resolved_api_key,
             grobid_url=resolved_grobid,
@@ -1607,6 +1630,16 @@ def unified_fetch_cmd(
     finally:
         if progress_bar[0] is not None:
             progress_bar[0].__exit__(None, None, None)
+
+    # Record search in workspace
+    if ws:
+        cmd = " ".join(sys.argv)
+        ws_search_config = {
+            "source": "unified",
+            "config_file": config_file,
+            "sources": search_config.sources,
+        }
+        ws.record_search(config=ws_search_config, command=cmd, stats=stats)
 
     # Summary
     click.echo("\n" + "=" * 60)
@@ -1625,21 +1658,32 @@ def unified_fetch_cmd(
     click.echo(f"Total fetched: {stats['total_fetched']:,}")
     click.echo(f"Total valid: {stats['total_valid']:,}")
     click.echo(f"Total incomplete: {stats['total_incomplete']:,}")
-    click.echo(f"Duplicates removed: {stats['duplicates_removed']:,}")
-    click.echo(f"\nOutput: {out}/")
+    if ws:
+        click.echo(f"Duplicates skipped: {stats.get('duplicates_skipped', 0):,}")
+    else:
+        click.echo(f"Duplicates removed: {stats['duplicates_removed']:,}")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
 
-    # Create tarball if requested
-    cmd = f"text-fetch fetch --config-file {config_file} --out {out}"
-    _handle_tarball_creation(
-        output_dir=out,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=stats,
-        search_config_dict=search_config.to_dict(),
-        command=cmd,
-        source="unified",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        cmd = f"text-fetch fetch --config-file {config_file} --out {out}"
+        _handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict=search_config.to_dict(),
+            command=cmd,
+            source="unified",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @cli.command(name="config")
