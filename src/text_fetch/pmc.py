@@ -578,6 +578,7 @@ def fetch_pmc(
                 # Check for duplicate DOI in workspace
                 if workspace and doi and workspace.has_doi(doi):
                     logger.debug("Skipping duplicate DOI: %s", doi)
+                    workspace.record_duplicate_skip(doi)
                     stats["duplicates_skipped"] += 1
                     continue
 

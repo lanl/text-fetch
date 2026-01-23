@@ -275,7 +275,11 @@ def deduplicate_by_doi(output_dir: Path) -> dict[str, Any]:
         try:
             dup_file = Path(dup_path)
             duplicates_dir.mkdir(parents=True, exist_ok=True)
-            dup_file.rename(duplicates_dir / dup_file.name)
+            # Prefix with source name to avoid filename collisions
+            rel_parts = dup_file.relative_to(output_dir).parts
+            source = rel_parts[0] if rel_parts else "unknown"
+            dest_name = f"{source}_{dup_file.name}"
+            dup_file.rename(duplicates_dir / dest_name)
             removed_count += 1
         except OSError:
             pass

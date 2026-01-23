@@ -380,6 +380,7 @@ def process_pdf_batch(
             doi = result.metadata.get("DOI")
             if workspace and doi and workspace.has_doi(doi):
                 logger.debug("Skipping duplicate: %s", doi)
+                workspace.record_duplicate_skip(doi)
                 duplicates_skipped += 1
                 result.notes.append("duplicate_doi_skipped")
                 results.append(result)

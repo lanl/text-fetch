@@ -513,6 +513,7 @@ def fetch_chemrxiv(
         # Check for duplicate DOI in workspace
         if workspace and article.doi and workspace.has_doi(article.doi):
             logger.debug("Skipping duplicate DOI: %s", article.doi)
+            workspace.record_duplicate_skip(article.doi)
             stats["duplicates_skipped"] += 1
             continue
 

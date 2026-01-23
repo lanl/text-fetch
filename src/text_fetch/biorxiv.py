@@ -599,6 +599,7 @@ def _fetch_preprints(
         # Check for duplicate DOI in workspace
         if workspace and workspace.has_doi(article.doi):
             logger.debug("Skipping duplicate DOI: %s", article.doi)
+            workspace.record_duplicate_skip(article.doi)
             stats["duplicates_skipped"] += 1
             continue
 

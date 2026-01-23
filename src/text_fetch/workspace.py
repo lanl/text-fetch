@@ -418,6 +418,21 @@ class Workspace:
         """
         return self.doi_index.contains(doi)
 
+    def record_duplicate_skip(self, doi: str) -> None:
+        """Record that a duplicate DOI was skipped.
+
+        Call this when a fetcher skips an article because has_doi() returned True.
+        This ensures workspace statistics accurately reflect all skipped duplicates.
+
+        Args:
+            doi: The DOI that was skipped.
+        """
+        self.manifest.statistics["duplicates_skipped"] = (
+            self.manifest.statistics.get("duplicates_skipped", 0) + 1
+        )
+        self._save_manifest()
+        logger.debug("Recorded duplicate skip for DOI: %s", doi)
+
     def add_file(
         self,
         jats_content: str,

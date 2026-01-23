@@ -237,7 +237,8 @@ class TestDeduplication:
         assert result["removed"] == 1  # One duplicate removed
         assert "10.1234/test" in result["unique_dois"]
         assert "10.5678/other" in result["unique_dois"]
-        assert (tmp_path / "_duplicates" / "PMC456.xml").exists()
+        # Filename is now prefixed with source (europepmc_PMC456.xml)
+        assert (tmp_path / "_duplicates" / "europepmc_PMC456.xml").exists()
 
     def test_keeps_pmc_over_others(self, tmp_path: Path) -> None:
         """PMC articles take priority over others."""
@@ -263,7 +264,8 @@ class TestDeduplication:
 
         # arXiv version should be removed (PMC has priority)
         assert result["removed"] == 1
-        assert (tmp_path / "_duplicates" / "arxiv_123.xml").exists()
+        # Filename is now prefixed with source (arxiv_arxiv_123.xml)
+        assert (tmp_path / "_duplicates" / "arxiv_arxiv_123.xml").exists()
         assert (pmc_dir / "PMC123.xml").exists()
 
     def test_no_duplicates(self, tmp_path: Path) -> None:
