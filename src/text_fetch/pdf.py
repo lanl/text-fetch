@@ -18,13 +18,16 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lxml import etree as ET
 
 from text_fetch.common import clean, sha1_of_file
 from text_fetch.grobid import GROBIDClient
 from text_fetch.pmc import JATSValidator, ValidationStatus
+
+if TYPE_CHECKING:
+    pass
 
 logger = logging.getLogger(__name__)
 
