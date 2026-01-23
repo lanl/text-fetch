@@ -16,11 +16,14 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from .common import RateLimiter
+
+if TYPE_CHECKING:
+    from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +403,7 @@ def fetch_chemrxiv(
     date_to: str | None = None,
     item_ids: list[str] | None = None,
     output_dir: str | Path = "chemrxiv_output",
+    workspace: Workspace | None = None,
     grobid_url: str | None = None,
     xslt_path: str | Path | None = None,
     max_results: int = 100,
@@ -420,7 +424,8 @@ def fetch_chemrxiv(
         date_from: Start date (YYYY-MM-DD).
         date_to: End date (YYYY-MM-DD).
         item_ids: Alternative - list of item IDs to fetch.
-        output_dir: Output directory.
+        output_dir: Output directory (used if workspace is None).
+        workspace: Optional workspace for deduplication and output.
         grobid_url: GROBID service URL.
         xslt_path: Path to tei2jats.xsl.
         max_results: Maximum articles.
@@ -433,8 +438,14 @@ def fetch_chemrxiv(
     from .grobid import GROBIDClient
     from .pmc import JATSValidator, save_pmc_article
 
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # Determine output path and search_id
+    if workspace:
+        search_id = workspace._get_next_search_id()
+        output_path = workspace.path
+    else:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        search_id = None
 
     # Initialize stats
     stats: dict[str, Any] = {
@@ -444,6 +455,7 @@ def fetch_chemrxiv(
         "converted": 0,
         "valid": 0,
         "incomplete": 0,
+        "duplicates_skipped": 0,
         "errors": 0,
     }
 
@@ -504,6 +516,12 @@ def fetch_chemrxiv(
         if progress_callback:
             progress_callback(article.item_id, i, total)
 
+        # Check for duplicate DOI in workspace
+        if workspace and article.doi and workspace.has_doi(article.doi):
+            logger.debug("Skipping duplicate DOI: %s", article.doi)
+            stats["duplicates_skipped"] += 1
+            continue
+
         try:
             # Download PDF
             pdf_bytes = client.download_pdf(article)
@@ -519,16 +537,32 @@ def fetch_chemrxiv(
                 continue
             stats["converted"] += 1
 
-            # Save with validation
-            article_id = f"chemrxiv:{article.id_short}"
-            _saved_path, result, _entry = save_pmc_article(
-                pmcid=article_id,
-                xml_content=jats,
-                output_dir=output_path,
-                validator=validator,
-            )
+            # Validate content
+            result = validator.validate(jats)
+            is_valid = result.status.value == "valid"
 
-            if result.status.value == "valid":
+            # Save to appropriate location
+            if workspace:
+                # Use workspace to save file (handles DOI indexing)
+                workspace.add_file(
+                    jats_content=jats,
+                    doi=article.doi,
+                    source="chemrxiv",
+                    search_id=search_id or "",
+                    is_valid=is_valid,
+                    filename=f"chemrxiv_{article.id_short}.xml",
+                )
+            else:
+                # Save with standard method
+                article_id = f"chemrxiv:{article.id_short}"
+                _saved_path, result, _entry = save_pmc_article(
+                    pmcid=article_id,
+                    xml_content=jats,
+                    output_dir=output_path,
+                    validator=validator,
+                )
+
+            if is_valid:
                 stats["valid"] += 1
             else:
                 stats["incomplete"] += 1
@@ -539,7 +573,7 @@ def fetch_chemrxiv(
 
     if verbose:
         logger.info(
-            "Fetch complete: %d downloaded, %d converted, " "%d valid, %d errors",
+            "Fetch complete: %d downloaded, %d converted, %d valid, %d errors",
             stats["pdfs_downloaded"],
             stats["converted"],
             stats["valid"],
