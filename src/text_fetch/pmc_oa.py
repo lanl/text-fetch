@@ -32,6 +32,9 @@ from text_fetch.common import RateLimiter
 
 logger = logging.getLogger(__name__)
 
+# Type for progress callbacks
+ProgressCallback = Callable[[str, int, int], None]
+
 # PMC OA FTP base URL (HTTP access)
 PMC_OA_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/pub/pmc"
 
@@ -57,9 +60,8 @@ class PMCOAFileEntry:
         if not self.last_updated:
             return None
         try:
-            return datetime.strptime(self.last_updated, "%Y-%m-%d %H:%M:%S").replace(
-                tzinfo=UTC
-            )
+            dt = datetime.strptime(self.last_updated, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=UTC)
         except ValueError:
             return None
 
@@ -131,7 +133,10 @@ class SyncManifest:
         )
 
 
-def parse_file_list(csv_content: str, subset: str = "") -> list[PMCOAFileEntry]:
+def parse_file_list(
+    csv_content: str,
+    subset: str = "",
+) -> list[PMCOAFileEntry]:
     """Parse PMC OA file list CSV content.
 
     The CSV format from PMC has columns:
@@ -414,7 +419,7 @@ class PMCOAClient:
         }
 
         logger.info(
-            "Sync: %d remote files, %d to download",
+            "Sync: %d remote, %d to download",
             stats["total_remote"],
             stats["to_download"],
         )
@@ -491,3 +496,194 @@ class PMCOAClient:
             local_path = self.storage_dir / entry.filename
             if local_path.exists():
                 yield accession_id, local_path
+
+    def verify_files(
+        self,
+        manifest: SyncManifest | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
+        """Verify local files against manifest.
+
+        Checks that files exist and have correct sizes.
+
+        Args:
+            manifest: Sync manifest (reads from disk if None).
+            progress_callback: Optional callback(accession_id, current, total).
+
+        Returns:
+            Dictionary with verification results.
+        """
+        if manifest is None:
+            manifest = read_sync_manifest(self.storage_dir)
+
+        total = len(manifest.entries)
+        verified = 0
+        missing = 0
+        size_mismatch = 0
+        missing_files: list[str] = []
+        mismatched_files: list[dict[str, Any]] = []
+
+        entries = list(manifest.entries.items())
+        for i, (accession_id, entry) in enumerate(entries):
+            if progress_callback:
+                progress_callback(accession_id, i, len(entries))
+
+            local_path = self.storage_dir / entry.filename
+
+            if not local_path.exists():
+                missing += 1
+                missing_files.append(accession_id)
+            elif local_path.stat().st_size != entry.size_bytes:
+                size_mismatch += 1
+                mismatched_files.append(
+                    {
+                        "accession_id": accession_id,
+                        "expected": entry.size_bytes,
+                        "actual": local_path.stat().st_size,
+                    }
+                )
+            else:
+                verified += 1
+
+        return {
+            "total": total,
+            "verified": verified,
+            "missing": missing,
+            "size_mismatch": size_mismatch,
+            "missing_files": missing_files,
+            "mismatched_files": mismatched_files,
+        }
+
+    def get_status(self) -> dict[str, Any]:
+        """Get status of local PMC OA mirror.
+
+        Returns:
+            Dictionary with status information.
+        """
+        manifest = read_sync_manifest(self.storage_dir)
+
+        # Count files by subset
+        subset_counts: dict[str, int] = {}
+        subset_bytes: dict[str, int] = {}
+        for entry in manifest.entries.values():
+            subset = entry.subset or "unknown"
+            subset_counts[subset] = subset_counts.get(subset, 0) + 1
+            subset_bytes[subset] = subset_bytes.get(subset, 0) + entry.size_bytes
+
+        total_files = len(manifest.entries)
+        total_bytes = sum(e.size_bytes for e in manifest.entries.values())
+
+        return {
+            "storage_dir": str(self.storage_dir),
+            "last_sync": manifest.last_sync,
+            "subsets": manifest.subsets,
+            "total_files": total_files,
+            "total_bytes": total_bytes,
+            "subset_counts": subset_counts,
+            "subset_bytes": subset_bytes,
+            "manifest_exists": bool(manifest.entries),
+        }
+
+
+def import_existing(
+    storage_dir: Path | str,
+    subsets: list[str] | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """Import existing .tar.gz files into sync manifest.
+
+    Scans the storage directory for existing .tar.gz files and
+    cross-references them with PMC file lists to create manifest entries.
+
+    Args:
+        storage_dir: Directory containing existing .tar.gz files.
+        subsets: Subsets to scan (default: all).
+        progress_callback: Optional callback(filename, current, total).
+
+    Returns:
+        Dictionary with import statistics.
+    """
+    storage_dir = Path(storage_dir)
+    subsets = subsets or list(OA_SUBSETS)
+
+    scanned = 0
+    matched = 0
+    unmatched = 0
+    unmatched_files: list[str] = []
+
+    # Find all .tar.gz files
+    logger.info("Scanning %s for .tar.gz files...", storage_dir)
+    local_files: dict[str, Path] = {}
+
+    for subset in subsets:
+        subset_dir = storage_dir / subset
+        if subset_dir.exists():
+            for tar_file in subset_dir.rglob("*.tar.gz"):
+                # Extract accession ID from filename (e.g., PMC12345.tar.gz)
+                stem = tar_file.stem.replace(".tar", "")
+                if stem.startswith("PMC"):
+                    local_files[stem] = tar_file
+                scanned += 1
+
+    if not local_files:
+        # Also check root directory for files
+        for tar_file in storage_dir.rglob("*.tar.gz"):
+            stem = tar_file.stem.replace(".tar", "")
+            if stem.startswith("PMC"):
+                local_files[stem] = tar_file
+            scanned += 1
+
+    logger.info("Found %d .tar.gz files with PMC IDs", len(local_files))
+
+    # Fetch file lists from PMC
+    with PMCOAClient(storage_dir, subsets=subsets) as client:
+        all_entries = client.get_all_entries()
+
+    # Build lookup by accession ID
+    entry_lookup: dict[str, PMCOAFileEntry] = {e.accession_id: e for e in all_entries}
+
+    # Match local files to PMC entries
+    manifest = read_sync_manifest(storage_dir)
+    total = len(local_files)
+
+    for i, (accession_id, local_path) in enumerate(local_files.items()):
+        if progress_callback:
+            progress_callback(accession_id, i, total)
+
+        pmc_entry = entry_lookup.get(accession_id)
+
+        if pmc_entry:
+            # Create manifest entry
+            file_size = local_path.stat().st_size
+            sha256 = compute_file_sha256(local_path)
+
+            manifest.entries[accession_id] = SyncManifestEntry(
+                filename=str(local_path.relative_to(storage_dir)),
+                accession_id=accession_id,
+                downloaded_at=datetime.now(UTC).isoformat(),
+                source_updated=pmc_entry.last_updated,
+                size_bytes=file_size,
+                sha256=sha256,
+                subset=pmc_entry.subset,
+            )
+            matched += 1
+        else:
+            unmatched += 1
+            unmatched_files.append(str(local_path.relative_to(storage_dir)))
+
+    # Update manifest
+    manifest.last_sync = datetime.now(UTC).isoformat()
+    manifest.subsets = subsets
+    manifest.statistics = {
+        "total_files": len(manifest.entries),
+        "last_import_matched": matched,
+        "last_import_unmatched": unmatched,
+    }
+    write_sync_manifest(storage_dir, manifest)
+
+    return {
+        "scanned": scanned,
+        "matched": matched,
+        "unmatched": unmatched,
+        "unmatched_files": unmatched_files,
+    }

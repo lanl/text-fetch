@@ -382,6 +382,209 @@ class TestPMCOAClient:
         assert items[0][1].name == "test.tar.gz"
 
 
+class TestPMCOAClientVerify:
+    """Tests for PMCOAClient.verify_files method."""
+
+    def test_verify_all_present(self, tmp_path: Path):
+        """Should verify all files are present with correct sizes."""
+        # Create test file
+        (tmp_path / "oa_comm").mkdir()
+        test_file = tmp_path / "oa_comm" / "test.tar.gz"
+        test_file.write_bytes(b"test content 123")
+
+        # Create manifest with matching size
+        entry = SyncManifestEntry(
+            filename="oa_comm/test.tar.gz",
+            accession_id="PMC12345",
+            downloaded_at="2024-01-15T10:00:00Z",
+            source_updated="2024-01-15 10:00:00",
+            size_bytes=16,  # len("test content 123")
+            sha256="abc",
+            subset="oa_comm",
+        )
+        manifest = SyncManifest(entries={"PMC12345": entry})
+        write_sync_manifest(tmp_path, manifest)
+
+        client = PMCOAClient(tmp_path)
+        results = client.verify_files()
+
+        assert results["total"] == 1
+        assert results["verified"] == 1
+        assert results["missing"] == 0
+        assert results["size_mismatch"] == 0
+
+    def test_verify_missing_file(self, tmp_path: Path):
+        """Should detect missing files."""
+        entry = SyncManifestEntry(
+            filename="oa_comm/missing.tar.gz",
+            accession_id="PMC12345",
+            downloaded_at="2024-01-15T10:00:00Z",
+            source_updated="2024-01-15 10:00:00",
+            size_bytes=100,
+            sha256="abc",
+            subset="oa_comm",
+        )
+        manifest = SyncManifest(entries={"PMC12345": entry})
+        write_sync_manifest(tmp_path, manifest)
+
+        client = PMCOAClient(tmp_path)
+        results = client.verify_files()
+
+        assert results["missing"] == 1
+        assert "PMC12345" in results["missing_files"]
+
+    def test_verify_size_mismatch(self, tmp_path: Path):
+        """Should detect files with incorrect sizes."""
+        # Create test file
+        (tmp_path / "oa_comm").mkdir()
+        test_file = tmp_path / "oa_comm" / "test.tar.gz"
+        test_file.write_bytes(b"short")
+
+        # Create manifest with different size
+        entry = SyncManifestEntry(
+            filename="oa_comm/test.tar.gz",
+            accession_id="PMC12345",
+            downloaded_at="2024-01-15T10:00:00Z",
+            source_updated="2024-01-15 10:00:00",
+            size_bytes=1000,  # Much larger than actual
+            sha256="abc",
+            subset="oa_comm",
+        )
+        manifest = SyncManifest(entries={"PMC12345": entry})
+        write_sync_manifest(tmp_path, manifest)
+
+        client = PMCOAClient(tmp_path)
+        results = client.verify_files()
+
+        assert results["size_mismatch"] == 1
+        assert len(results["mismatched_files"]) == 1
+
+
+class TestPMCOAClientStatus:
+    """Tests for PMCOAClient.get_status method."""
+
+    def test_status_empty_manifest(self, tmp_path: Path):
+        """Should return status for empty directory."""
+        client = PMCOAClient(tmp_path)
+        status = client.get_status()
+
+        assert status["total_files"] == 0
+        assert status["manifest_exists"] is False
+
+    def test_status_with_files(self, tmp_path: Path):
+        """Should return status with file counts by subset."""
+        entries = {
+            "PMC111": SyncManifestEntry(
+                filename="oa_comm/test1.tar.gz",
+                accession_id="PMC111",
+                downloaded_at="2024-01-15T10:00:00Z",
+                source_updated="2024-01-15 10:00:00",
+                size_bytes=1000,
+                sha256="abc",
+                subset="oa_comm",
+            ),
+            "PMC222": SyncManifestEntry(
+                filename="oa_comm/test2.tar.gz",
+                accession_id="PMC222",
+                downloaded_at="2024-01-15T10:00:00Z",
+                source_updated="2024-01-15 10:00:00",
+                size_bytes=2000,
+                sha256="def",
+                subset="oa_comm",
+            ),
+            "PMC333": SyncManifestEntry(
+                filename="oa_noncomm/test3.tar.gz",
+                accession_id="PMC333",
+                downloaded_at="2024-01-15T10:00:00Z",
+                source_updated="2024-01-15 10:00:00",
+                size_bytes=500,
+                sha256="ghi",
+                subset="oa_noncomm",
+            ),
+        }
+        manifest = SyncManifest(
+            last_sync="2024-01-15T12:00:00Z",
+            subsets=["oa_comm", "oa_noncomm"],
+            entries=entries,
+        )
+        write_sync_manifest(tmp_path, manifest)
+
+        client = PMCOAClient(tmp_path)
+        status = client.get_status()
+
+        assert status["total_files"] == 3
+        assert status["total_bytes"] == 3500
+        assert status["manifest_exists"] is True
+        assert status["subset_counts"]["oa_comm"] == 2
+        assert status["subset_counts"]["oa_noncomm"] == 1
+
+
+class TestImportExisting:
+    """Tests for import_existing function."""
+
+    @patch("text_fetch.pmc_oa.PMCOAClient")
+    def test_import_matches_files(
+        self,
+        mock_client_cls: MagicMock,
+        tmp_path: Path,
+    ):
+        """Should match local files to PMC entries."""
+        from text_fetch.pmc_oa import import_existing
+
+        # Create local files
+        oa_comm = tmp_path / "oa_comm" / "oa_package" / "00" / "00"
+        oa_comm.mkdir(parents=True)
+        (oa_comm / "PMC12345.tar.gz").write_bytes(b"test content")
+
+        # Mock PMC file list
+        mock_client = MagicMock()
+        mock_client_cls.return_value.__enter__.return_value = mock_client
+        mock_client.get_all_entries.return_value = [
+            PMCOAFileEntry(
+                filename="oa_package/00/00/PMC12345.tar.gz",
+                citation="Test",
+                accession_id="PMC12345",
+                last_updated="2024-01-15 10:00:00",
+                pmid="12345",
+                license="CC BY",
+                subset="oa_comm",
+            )
+        ]
+
+        results = import_existing(tmp_path)
+
+        assert results["matched"] == 1
+        assert results["unmatched"] == 0
+
+        # Check manifest was created
+        manifest = read_sync_manifest(tmp_path)
+        assert "PMC12345" in manifest.entries
+
+    @patch("text_fetch.pmc_oa.PMCOAClient")
+    def test_import_unmatched_files(
+        self,
+        mock_client_cls: MagicMock,
+        tmp_path: Path,
+    ):
+        """Should report unmatched files."""
+        from text_fetch.pmc_oa import import_existing
+
+        # Create local file not in PMC list
+        oa_comm = tmp_path / "oa_comm"
+        oa_comm.mkdir()
+        (oa_comm / "PMC99999.tar.gz").write_bytes(b"old content")
+
+        # Mock empty PMC file list
+        mock_client = MagicMock()
+        mock_client_cls.return_value.__enter__.return_value = mock_client
+        mock_client.get_all_entries.return_value = []
+
+        results = import_existing(tmp_path)
+
+        assert results["matched"] == 0
+        assert results["unmatched"] == 1
+
+
 class TestPMCOAClientSync:
     """Tests for PMCOAClient.sync method."""
 

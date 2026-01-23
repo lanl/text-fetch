@@ -535,9 +535,9 @@ def pmc_fetch(
     help="Storage directory for PMC OA corpus",
 )
 @click.option(
-    "--update",
+    "--download",
     is_flag=True,
-    help="Only download new/updated files (incremental update)",
+    help="Actually download files (default is dry-run)",
 )
 @click.option(
     "--subset",
@@ -552,6 +552,11 @@ def pmc_fetch(
     help="Maximum files to download (for testing)",
 )
 @click.option(
+    "--verify",
+    is_flag=True,
+    help="Verify existing files match expected sizes",
+)
+@click.option(
     "--yes",
     "-y",
     is_flag=True,
@@ -562,27 +567,30 @@ def pmc_fetch(
 def pmc_sync(
     ctx: click.Context,
     storage: str,
-    update: bool,
+    download: bool,
     subset: tuple[str, ...],
     max_files: int | None,
+    verify: bool,
     yes: bool,
     verbose: bool,
 ) -> None:
-    """Sync PMC Open Access corpus to local storage.
+    """Check for PMC OA updates (dry-run by default).
 
-    Downloads tar.gz files from the PMC Open Access subset.
-    Use --update for incremental updates after initial sync.
+    Shows what files would be downloaded. Use --download to fetch.
 
     \b
     Examples:
-        # Initial sync (downloads entire corpus ~400GB)
+        # Check for updates (dry-run)
         text-fetch pmc sync --storage /Volumes/External/pmc-oa
 
-        # Incremental update
-        text-fetch pmc sync --storage /Volumes/External/pmc-oa --update
+        # Download updates
+        text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
 
         # Sync only commercial-use subset
-        text-fetch pmc sync --storage ./pmc-oa --subset oa_comm
+        text-fetch pmc sync --storage ./pmc-oa --subset oa_comm --download
+
+        # Verify existing files
+        text-fetch pmc sync --storage ./pmc-oa --verify
     """
     import logging
 
@@ -598,26 +606,66 @@ def pmc_sync(
 
     click.echo(f"Storage directory: {storage}")
     click.echo(f"Subsets: {', '.join(subsets)}")
-    click.echo(f"Mode: {'incremental update' if update else 'full sync'}")
 
     # Check existing manifest
     manifest = read_sync_manifest(storage)
     if manifest.entries:
-        click.echo(f"Existing manifest: {len(manifest.entries)} files")
+        click.echo(f"Local files: {len(manifest.entries):,}")
         if manifest.last_sync:
             click.echo(f"Last sync: {manifest.last_sync}")
+    else:
+        click.echo("Local files: 0 (no manifest)")
 
     with PMCOAClient(storage, subsets=subsets) as client:
+        # Handle verification mode
+        if verify:
+            if not manifest.entries:
+                click.echo("\nNo files to verify. Run import first.")
+                return
+
+            click.echo("\nVerifying local files...")
+            with click.progressbar(
+                length=len(manifest.entries),
+                label="Verifying",
+                show_pos=True,
+                show_percent=True,
+            ) as bar:
+
+                def verify_callback(
+                    accession_id: str, current: int, total: int
+                ) -> None:
+                    bar.update(1)
+
+                results = client.verify_files(
+                    manifest=manifest,
+                    progress_callback=verify_callback,
+                )
+
+            click.echo("\n" + "=" * 50)
+            click.echo("Verification complete!")
+            click.echo(f"  Total: {results['total']:,}")
+            click.echo(f"  Verified: {results['verified']:,}")
+            click.echo(f"  Missing: {results['missing']:,}")
+            click.echo(f"  Size mismatch: {results['size_mismatch']:,}")
+
+            if results["missing_files"] and verbose:
+                click.echo("\nMissing files:")
+                for f in results["missing_files"][:10]:
+                    click.echo(f"  {f}")
+                if len(results["missing_files"]) > 10:
+                    click.echo(f"  ... and {len(results['missing_files']) - 10} more")
+            return
+
         # Fetch file lists to show stats
-        click.echo("\nFetching file lists...")
+        click.echo("\nFetching remote file lists...")
         all_entries = client.get_all_entries()
 
         if not all_entries:
             click.echo("Error: Could not fetch file lists from PMC")
             ctx.exit(1)
 
-        # Calculate what needs to be downloaded
-        if update and manifest.entries:
+        # Calculate what needs to be downloaded (always incremental if we have files)
+        if manifest.entries:
             to_download = client.get_updates(manifest, all_entries)
         else:
             to_download = all_entries
@@ -627,27 +675,43 @@ def pmc_sync(
 
         # Calculate estimated size (rough estimate: ~5MB average per file)
         estimated_size_mb = len(to_download) * 5
+        estimated_size_gb = estimated_size_mb / 1024
 
-        click.echo(f"\nRemote files: {len(all_entries):,}")
-        click.echo(f"Files to download: {len(to_download):,}")
-        click.echo(f"Estimated size: ~{estimated_size_mb:,} MB")
+        # Show status summary
+        click.echo("\n" + "=" * 50)
+        click.echo("PMC OA Status:")
+        click.echo(f"  Remote files: {len(all_entries):,}")
+        click.echo(f"  Local files:  {len(manifest.entries):,}")
+        click.echo(f"  New/updated:  {len(to_download):,}", nl=False)
+        if to_download:
+            if estimated_size_gb >= 1:
+                click.echo(f" (~{estimated_size_gb:.1f} GB)")
+            else:
+                click.echo(f" (~{estimated_size_mb:,} MB)")
+        else:
+            click.echo()
 
         if not to_download:
-            click.echo("\nNothing to download. Already up to date.")
+            click.echo("\nAlready up to date!")
             return
 
-        # Confirmation prompt
-        if not yes:
-            if len(to_download) > 1000:
-                click.echo(
-                    f"\nWarning: This will download {len(to_download):,} files "
-                    f"(~{estimated_size_mb / 1024:.1f} GB)."
-                )
-            if not click.confirm("\nProceed with download?"):
+        # If not downloading, show dry-run message
+        if not download:
+            click.echo("\nRun with --download to fetch updates.")
+            return
+
+        # Confirmation prompt for large downloads
+        if not yes and len(to_download) > 1000:
+            click.echo(
+                f"\nWarning: This will download {len(to_download):,} files "
+                f"(~{estimated_size_gb:.1f} GB)."
+            )
+            if not click.confirm("Proceed with download?"):
                 click.echo("Aborted.")
                 ctx.exit(0)
 
-        # Progress bar
+        # Progress bar for download
+        click.echo()
         with click.progressbar(
             length=len(to_download),
             label="Downloading",
@@ -659,7 +723,7 @@ def pmc_sync(
                 bar.update(1)
 
             stats = client.sync(
-                update_only=update,
+                update_only=bool(manifest.entries),
                 progress_callback=progress_callback,
                 max_files=max_files,
             )
@@ -671,6 +735,149 @@ def pmc_sync(
         click.echo(f"  Failed: {stats['failed']:,}")
         click.echo(f"  Total bytes: {stats['bytes_downloaded']:,}")
         click.echo(f"  Manifest: {storage}/sync_manifest.json")
+
+
+@pmc.command(name="status")
+@click.option(
+    "--storage",
+    required=True,
+    type=click.Path(),
+    help="Storage directory for PMC OA corpus",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def pmc_status(
+    ctx: click.Context,
+    storage: str,
+    verbose: bool,
+) -> None:
+    """Show status of local PMC OA mirror.
+
+    \b
+    Examples:
+        text-fetch pmc status --storage /Volumes/External/pmc-oa
+    """
+    from .pmc_oa import PMCOAClient
+
+    with PMCOAClient(storage) as client:
+        status = client.get_status()
+
+    click.echo("PMC OA Local Mirror")
+    click.echo("=" * 40)
+    click.echo(f"Storage: {status['storage_dir']}")
+
+    if not status["manifest_exists"]:
+        click.echo("\nNo manifest found. Run 'pmc import' or 'pmc sync' first.")
+        return
+
+    if status["last_sync"]:
+        last_sync = status["last_sync"][:19].replace("T", " ")
+        click.echo(f"Last sync: {last_sync}")
+
+    click.echo()
+    click.echo("Subsets:")
+    for subset in status.get("subsets", []):
+        count = status["subset_counts"].get(subset, 0)
+        size_bytes = status["subset_bytes"].get(subset, 0)
+        size_gb = size_bytes / (1024 * 1024 * 1024)
+        click.echo(f"  {subset}: {count:,} files ({size_gb:.1f} GB)")
+
+    total_gb = status["total_bytes"] / (1024 * 1024 * 1024)
+    click.echo()
+    click.echo(f"Total: {status['total_files']:,} files ({total_gb:.1f} GB)")
+
+
+@pmc.command(name="import")
+@click.option(
+    "--storage",
+    required=True,
+    type=click.Path(exists=True),
+    help="Storage directory containing existing .tar.gz files",
+)
+@click.option(
+    "--subset",
+    multiple=True,
+    type=click.Choice(["oa_comm", "oa_noncomm", "oa_other"]),
+    help="Subset(s) to import (default: all)",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def pmc_import(
+    ctx: click.Context,
+    storage: str,
+    subset: tuple[str, ...],
+    verbose: bool,
+) -> None:
+    """Import existing .tar.gz files into sync manifest.
+
+    Scans the storage directory for existing PMC .tar.gz files and
+    cross-references them with PMC file lists to create manifest entries.
+    This allows incremental updates after manually downloading the corpus.
+
+    \b
+    Examples:
+        # Import existing collection
+        text-fetch pmc import --storage /Volumes/External/pmc-oa
+
+        # Import only commercial-use subset
+        text-fetch pmc import --storage ./pmc-oa --subset oa_comm
+    """
+    import logging
+
+    from .pmc_oa import import_existing
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    # Determine subsets
+    subsets = list(subset) if subset else None
+
+    click.echo(f"Scanning {storage} for .tar.gz files...")
+    click.echo("(This may take a while for large collections)")
+    click.echo()
+
+    # Progress tracking
+    progress_bar = None
+
+    def progress_callback(accession_id: str, current: int, total: int) -> None:
+        nonlocal progress_bar
+        if progress_bar is None and total > 0:
+            progress_bar = click.progressbar(
+                length=total,
+                label="Matching files",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar.__enter__()
+        if progress_bar is not None:
+            progress_bar.update(1)
+
+    try:
+        results = import_existing(
+            storage_dir=storage,
+            subsets=subsets,
+            progress_callback=progress_callback,
+        )
+    finally:
+        if progress_bar is not None:
+            progress_bar.__exit__(None, None, None)
+
+    click.echo("\n" + "=" * 50)
+    click.echo("Import complete!")
+    click.echo(f"  Files scanned: {results['scanned']:,}")
+    click.echo(f"  Matched: {results['matched']:,}")
+    click.echo(f"  Unmatched: {results['unmatched']:,}")
+    click.echo(f"  Manifest: {storage}/sync_manifest.json")
+
+    if results["unmatched_files"] and verbose:
+        click.echo("\nUnmatched files (not in current PMC lists):")
+        for f in results["unmatched_files"][:10]:
+            click.echo(f"  {f}")
+        if len(results["unmatched_files"]) > 10:
+            more = len(results["unmatched_files"]) - 10
+            click.echo(f"  ... and {more} more")
 
 
 @cli.group()
