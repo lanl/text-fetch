@@ -366,11 +366,16 @@ def process_pdf_batch(
                 ocr=ocr,
             )
 
-            # NCBI ID resolution
+            # NCBI ID resolution (DOI -> PMID/PMCID)
             if ncbi and result.metadata.get("DOI"):
                 try:
-                    mapping = ncbi.convert_ids([result.metadata["DOI"]], id_type="doi")
-                    pmcid = mapping.get(result.metadata["DOI"])
+                    result_doi = result.metadata["DOI"]
+                    mapping = ncbi.convert_doi_to_ids([result_doi])
+                    ids = mapping.get(result_doi, {})
+                    pmid = ids.get("pmid")
+                    pmcid = ids.get("pmcid")
+                    if pmid:
+                        result.metadata["PMID"] = pmid
                     if pmcid:
                         result.metadata["PMCID"] = pmcid
                 except Exception as e:

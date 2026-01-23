@@ -434,6 +434,84 @@ class NCBIClient:
 
         return results
 
+    def convert_doi_to_ids(
+        self,
+        dois: list[str],
+    ) -> dict[str, dict[str, str | None]]:
+        """Convert DOIs to both PMID and PMCID.
+
+        Uses the NCBI ID Converter service to get both PMID and PMCID for DOIs.
+
+        Args:
+            dois: List of DOIs to convert.
+
+        Returns:
+            Dictionary mapping DOIs to dicts with 'pmid' and 'pmcid' keys.
+            Values are None if not available.
+
+        Example:
+            >>> client = NCBIClient(email="user@example.com")
+            >>> mapping = client.convert_doi_to_ids(["10.1234/example"])
+            >>> for doi, ids in mapping.items():
+            ...     print(f"{doi}: PMID={ids['pmid']}, PMCID={ids['pmcid']}")
+        """
+        if not dois:
+            return {}
+
+        # Process in batches of 200 (API limit)
+        batch_size = 200
+        results: dict[str, dict[str, str | None]] = {}
+
+        for i in range(0, len(dois), batch_size):
+            batch = dois[i : i + batch_size]
+            batch_results = self._convert_doi_to_ids_batch(batch)
+            results.update(batch_results)
+
+        return results
+
+    def _convert_doi_to_ids_batch(
+        self,
+        dois: list[str],
+    ) -> dict[str, dict[str, str | None]]:
+        """Convert a single batch of DOIs to PMID/PMCID (internal method).
+
+        Args:
+            dois: List of DOIs (max 200).
+
+        Returns:
+            Dictionary mapping DOIs to dicts with 'pmid' and 'pmcid' keys.
+        """
+        params: dict[str, Any] = {
+            "ids": ",".join(dois),
+            "idtype": "doi",
+            "format": "json",
+        }
+
+        response = self._request(
+            "",
+            params,
+            base_url=self.ID_CONVERTER_URL.rstrip("/"),
+        )
+
+        # Initialize with None values
+        results: dict[str, dict[str, str | None]] = {
+            doi: {"pmid": None, "pmcid": None} for doi in dois
+        }
+
+        # Parse the response
+        records = response.get("records", [])
+        for record in records:
+            doi = record.get("doi")
+            if doi and doi in results:
+                pmid = record.get("pmid")
+                pmcid = record.get("pmcid")
+                if pmid:
+                    results[doi]["pmid"] = str(pmid)
+                if pmcid:
+                    results[doi]["pmcid"] = pmcid
+
+        return results
+
     def get_pmcids(self, pmids: list[str]) -> dict[str, str]:
         """Get PMCIDs for a list of PMIDs (only those with PMC full-text).
 
