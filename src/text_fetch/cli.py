@@ -298,6 +298,11 @@ def pmc(ctx: click.Context) -> None:
 @click.option("--query", help="Raw PubMed query string")
 @click.option("--out", required=True, help="Output directory")
 @click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
+@click.option(
     "--email",
     default=None,
     envvar="NCBI_EMAIL",
@@ -318,6 +323,7 @@ def pmc_fetch(
     config_file: str | None,
     query: str | None,
     out: str,
+    workspace: str | None,
     email: str | None,
     api_key: str | None,
     tarball: bool,
@@ -333,11 +339,16 @@ def pmc_fetch(
 
         # Fetch using JSON config
         text-fetch pmc fetch --config-file input/ebola.json --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch pmc fetch --query "hlavacek ws[au]" --workspace ./my-corpus --out ./output
     """
     import logging
+    import sys
 
     from .pmc import fetch_pmc
     from .query import SearchConfig, SearchConfigError
+    from .workspace import Workspace
 
     if not config_file and not query:
         raise click.UsageError("Either --config-file or --query is required")
@@ -362,6 +373,14 @@ def pmc_fetch(
             click.echo("No NCBI API key configured (using lower rate limit)")
         if config.config_path:
             click.echo(f"Config loaded from: {config.config_path}")
+
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
 
     # Load search config if provided
     search_config = None
@@ -404,6 +423,7 @@ def pmc_fetch(
             email=resolved_email,
             api_key=resolved_api_key,
             output_dir=out,
+            workspace=ws,
             verbose=verbose,
             progress_callback=progress_callback,
         )
@@ -411,6 +431,16 @@ def pmc_fetch(
     finally:
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
+
+    # Record search in workspace
+    if ws:
+        cmd = " ".join(sys.argv)
+        ws_search_config = {
+            "source": "pmc",
+            "query": query,
+            "config_file": config_file,
+        }
+        ws.record_search(config=ws_search_config, command=cmd, stats=stats)
 
     # Print summary
     click.echo("\n" + "=" * 50)
@@ -421,23 +451,33 @@ def pmc_fetch(
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
     click.echo(f"  Skipped (duplicates): {stats['skipped']:,}")
+    if stats.get("duplicates_skipped"):
+        click.echo(f"  DOI duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
-    click.echo(f"\nOutput: {out}/")
-    click.echo(f"Manifest: {out}/manifest.json")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
+        click.echo(f"Manifest: {out}/manifest.json")
 
-    # Create tarball if requested
-    search_config_dict = search_config.to_dict() if search_config else None
-    cmd = f"text-fetch pmc fetch --query '{query or pubmed_query}' --out {out}"
-    _handle_tarball_creation(
-        output_dir=out,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=stats,
-        search_config_dict=search_config_dict,
-        command=cmd,
-        source="pmc",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        search_config_dict = search_config.to_dict() if search_config else None
+        cmd = f"text-fetch pmc fetch --query '{query or pubmed_query}' --out {out}"
+        _handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict=search_config_dict,
+            command=cmd,
+            source="pmc",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @pmc.command(name="sync")

@@ -23,8 +23,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from xml.etree import ElementTree as ET
+
+if TYPE_CHECKING:
+    from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +436,7 @@ def fetch_pmc(
     email: str = "",
     api_key: str | None = None,
     output_dir: str | Path = "pmc_output",
+    workspace: Workspace | None = None,
     verbose: bool = False,
     progress_callback: Any = None,
 ) -> dict[str, Any]:
@@ -451,7 +455,8 @@ def fetch_pmc(
         query: Raw PubMed query string (optional if config provided).
         email: Email for NCBI API (required).
         api_key: NCBI API key (optional, for higher rate limits).
-        output_dir: Output directory for downloaded articles.
+        output_dir: Output directory (used if workspace is None).
+        workspace: Optional workspace for deduplication and output.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(pmcid, current, total).
 
@@ -465,6 +470,7 @@ def fetch_pmc(
         - incomplete: Number incomplete
         - errors: Number of errors
         - skipped: Number skipped (already in manifest)
+        - duplicates_skipped: Number of DOI duplicates (workspace mode)
 
     Raises:
         ValueError: If neither config nor query provided, or email missing.
@@ -486,8 +492,14 @@ def fetch_pmc(
     # Build query string
     pubmed_query = config.to_pubmed_query() if config is not None else query
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # Determine output path and search_id
+    if workspace:
+        search_id = workspace._get_next_search_id()
+        output_path = workspace.path
+    else:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        search_id = None
 
     # Initialize stats
     stats: dict[str, Any] = {
@@ -499,10 +511,11 @@ def fetch_pmc(
         "incomplete": 0,
         "errors": 0,
         "skipped": 0,
+        "duplicates_skipped": 0,
     }
 
-    # Load existing manifest for incremental updates
-    existing_manifest = read_manifest(output_dir)
+    # Load existing manifest for incremental updates (only if not using workspace)
+    existing_manifest = read_manifest(output_path) if not workspace else {}
     manifest = dict(existing_manifest)
 
     if verbose:
@@ -513,14 +526,15 @@ def fetch_pmc(
         # Step 1: Search PubMed
         if verbose:
             logger.info("Searching PubMed...")
-        pmids = client.esearch_ids(pubmed_query)
+        pmids = client.esearch_ids(str(pubmed_query))
         stats["pmids_found"] = len(pmids)
 
         if verbose:
             logger.info("Found %d PMIDs", len(pmids))
 
         if not pmids:
-            write_manifest(output_dir, manifest, metadata={"query": pubmed_query})
+            if not workspace:
+                write_manifest(output_path, manifest, metadata={"query": pubmed_query})
             return stats
 
         # Step 2: Convert PMIDs to PMCIDs
@@ -537,7 +551,8 @@ def fetch_pmc(
             )
 
         if not pmcid_map:
-            write_manifest(output_dir, manifest, metadata={"query": pubmed_query})
+            if not workspace:
+                write_manifest(output_path, manifest, metadata={"query": pubmed_query})
             return stats
 
         # Step 3: Fetch and save each article
@@ -557,33 +572,64 @@ def fetch_pmc(
                     stats["errors"] += 1
                     continue
 
-                # Save with validation
-                saved_path, result, entry = save_pmc_article(
-                    pmcid=pmcid,
-                    xml_content=xml_content,
-                    output_dir=output_dir,
-                    validator=validator,
-                    existing_manifest=existing_manifest,
-                )
+                # Extract DOI for workspace deduplication
+                doi = _extract_doi_from_jats(xml_content)
 
-                # Update manifest
-                manifest[entry.pmcid] = entry
+                # Check for duplicate DOI in workspace
+                if workspace and doi and workspace.has_doi(doi):
+                    logger.debug("Skipping duplicate DOI: %s", doi)
+                    stats["duplicates_skipped"] += 1
+                    continue
 
-                if saved_path is None:
-                    stats["skipped"] += 1
-                else:
+                # Validate content
+                result = validator.validate(xml_content)
+                is_valid = result.status == ValidationStatus.VALID
+
+                # Save to appropriate location
+                if workspace:
+                    # Use workspace to save file (handles DOI indexing)
+                    workspace.add_file(
+                        jats_content=xml_content,
+                        doi=doi,
+                        source="pmc",
+                        search_id=search_id or "",
+                        is_valid=is_valid,
+                        filename=f"{pmcid}.xml",
+                    )
                     stats["fetched"] += 1
-                    if result.status == ValidationStatus.VALID:
+                    if is_valid:
                         stats["valid"] += 1
                     else:
                         stats["incomplete"] += 1
+                else:
+                    # Save with standard method
+                    saved_path, result, entry = save_pmc_article(
+                        pmcid=pmcid,
+                        xml_content=xml_content,
+                        output_dir=output_path,
+                        validator=validator,
+                        existing_manifest=existing_manifest,
+                    )
+
+                    # Update manifest
+                    manifest[entry.pmcid] = entry
+
+                    if saved_path is None:
+                        stats["skipped"] += 1
+                    else:
+                        stats["fetched"] += 1
+                        if result.status == ValidationStatus.VALID:
+                            stats["valid"] += 1
+                        else:
+                            stats["incomplete"] += 1
 
             except Exception as e:
                 logger.error("Error fetching %s: %s", pmcid, e)
                 stats["errors"] += 1
 
-    # Write final manifest
-    write_manifest(output_dir, manifest, metadata={"query": pubmed_query})
+    # Write final manifest (only if not using workspace)
+    if not workspace:
+        write_manifest(output_path, manifest, metadata={"query": pubmed_query})
 
     if verbose:
         logger.info(
@@ -595,3 +641,24 @@ def fetch_pmc(
         )
 
     return stats
+
+
+def _extract_doi_from_jats(xml_content: str) -> str | None:
+    """Extract DOI from JATS XML content.
+
+    Args:
+        xml_content: JATS XML string.
+
+    Returns:
+        DOI string or None if not found.
+    """
+    try:
+        root = ET.fromstring(xml_content)
+        # Look for article-id with pub-id-type="doi"
+        for article_id in root.iter("article-id"):
+            pub_id_type = article_id.get("pub-id-type", "").lower()
+            if pub_id_type == "doi" and article_id.text:
+                return article_id.text.strip()
+    except ET.ParseError:
+        pass
+    return None
