@@ -14,6 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from .checkpoint import (
+    FetchCheckpoint,
+    clear_checkpoint,
+    get_checkpoint_path,
+    load_checkpoint_if_exists,
+)
 from .common import RateLimiter
 
 if TYPE_CHECKING:
@@ -287,6 +293,8 @@ def fetch_arxiv(
     max_results: int = 100,
     verbose: bool = False,
     progress_callback: Any = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch arXiv articles and convert to JATS.
 
@@ -306,6 +314,8 @@ def fetch_arxiv(
         max_results: Maximum articles to fetch.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(arxiv_id, current, total).
+        resume: Resume from checkpoint if available.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dict with search/fetch/conversion results.
@@ -333,6 +343,28 @@ def fetch_arxiv(
         output_path.mkdir(parents=True, exist_ok=True)
         search_id = None
 
+    # Handle update mode - add date filter to query
+    effective_query = str(arxiv_query) if arxiv_query else ""
+    if update and workspace:
+        last_fetch = workspace.get_last_fetch_date("arxiv")
+        if last_fetch:
+            # arXiv uses submittedDate:[YYYYMMDD TO *] format
+            # Convert YYYY-MM-DD to YYYYMMDD
+            date_filter = last_fetch.replace("-", "")
+            if effective_query:
+                effective_query = (
+                    f"({effective_query}) AND submittedDate:[{date_filter} TO *]"
+                )
+            else:
+                effective_query = f"submittedDate:[{date_filter} TO *]"
+            if verbose:
+                logger.info("Update mode: fetching papers since %s", last_fetch)
+        else:
+            if verbose:
+                logger.info(
+                    "Update mode: no previous fetch, proceeding with full fetch"
+                )
+
     # Default XSLT path - use bundled package resource
     if xslt_path is None:
         from .grobid import get_default_xslt_path
@@ -341,14 +373,17 @@ def fetch_arxiv(
 
     # Initialize stats
     stats: dict[str, Any] = {
-        "query": arxiv_query,
+        "source": "arxiv",
+        "query": effective_query,
         "articles_found": 0,
         "pdfs_downloaded": 0,
         "converted": 0,
         "valid": 0,
         "incomplete": 0,
+        "skipped": 0,
         "duplicates_skipped": 0,
         "errors": 0,
+        "resumed_from": 0,
     }
 
     # Initialize clients
@@ -360,18 +395,55 @@ def fetch_arxiv(
         raise RuntimeError(f"GROBID not available at {grobid_client.url}")
 
     if verbose:
-        logger.info("Query: %s", arxiv_query)
+        logger.info("Query: %s", effective_query)
         logger.info("GROBID: %s", grobid_client.url)
 
     # Search arXiv
-    articles = arxiv_client.search(str(arxiv_query), max_results=max_results)
+    articles = arxiv_client.search(effective_query, max_results=max_results)
     stats["articles_found"] = len(articles)
 
     if verbose:
         logger.info("Found %d articles", len(articles))
 
     if not articles:
+        # Update workspace source record even if no results
+        if workspace:
+            workspace.update_source_record("arxiv", 0)
         return stats
+
+    # Build config for checkpoint
+    fetch_config = {
+        "query": effective_query,
+        "max_results": max_results,
+    }
+
+    # Load or create checkpoint
+    checkpoint: FetchCheckpoint | None = None
+    checkpoint_path = get_checkpoint_path(output_path)
+
+    if resume:
+        checkpoint = load_checkpoint_if_exists(output_path)
+        if checkpoint:
+            # Validate config hasn't changed
+            if not checkpoint.validate_config(fetch_config):
+                logger.warning("Config changed since checkpoint. Starting fresh.")
+                checkpoint = None
+            else:
+                stats["resumed_from"] = len(checkpoint.completed)
+                if verbose:
+                    logger.info(
+                        "Resuming from checkpoint: %d completed",
+                        len(checkpoint.completed),
+                    )
+
+    if checkpoint is None:
+        checkpoint = FetchCheckpoint.create(
+            config=fetch_config,
+            source="arxiv",
+            total_expected=len(articles),
+            output_path=output_path,
+        )
+        checkpoint.reset_save_tracking()
 
     # Process each article
     validator = JATSValidator()
@@ -381,11 +453,18 @@ def fetch_arxiv(
         if progress_callback:
             progress_callback(article.arxiv_id, i, total)
 
+        # Skip if already completed in checkpoint
+        if checkpoint.is_complete(article.arxiv_id):
+            stats["skipped"] += 1
+            continue
+
         # Check for duplicate DOI in workspace
         if workspace and article.doi and workspace.has_doi(article.doi):
             logger.debug("Skipping duplicate DOI: %s", article.doi)
             workspace.record_duplicate_skip(article.doi)
             stats["duplicates_skipped"] += 1
+            # Mark as complete in checkpoint to avoid retry
+            checkpoint.mark_complete(article.arxiv_id)
             continue
 
         try:
@@ -393,6 +472,8 @@ def fetch_arxiv(
             pdf_bytes = arxiv_client.download_pdf(article)
             if pdf_bytes is None:
                 stats["errors"] += 1
+                checkpoint.mark_failed(article.arxiv_id, "Failed to download PDF")
+                checkpoint.save_if_needed(checkpoint_path)
                 continue
             stats["pdfs_downloaded"] += 1
 
@@ -400,6 +481,8 @@ def fetch_arxiv(
             jats = grobid_client.pdf_to_jats(pdf_bytes, xslt_path)
             if jats is None:
                 stats["errors"] += 1
+                checkpoint.mark_failed(article.arxiv_id, "GROBID conversion failed")
+                checkpoint.save_if_needed(checkpoint_path)
                 continue
             stats["converted"] += 1
 
@@ -434,9 +517,29 @@ def fetch_arxiv(
             else:
                 stats["incomplete"] += 1
 
+            # Mark complete and save checkpoint periodically
+            checkpoint.mark_complete(article.arxiv_id)
+            checkpoint.save_if_needed(checkpoint_path)
+
         except Exception as e:
             logger.error("Error processing %s: %s", article.arxiv_id, e)
             stats["errors"] += 1
+            checkpoint.mark_failed(article.arxiv_id, str(e))
+            checkpoint.save_if_needed(checkpoint_path)
+
+    # Final checkpoint save and cleanup
+    checkpoint.save(checkpoint_path)
+
+    # Clear checkpoint on successful completion (all attempted)
+    attempted = stats["converted"] + stats["errors"] + stats["duplicates_skipped"]
+    if attempted >= len(articles) - stats["resumed_from"]:
+        clear_checkpoint(output_path)
+        if verbose:
+            logger.info("Fetch complete, checkpoint cleared")
+
+    # Update workspace source record
+    if workspace:
+        workspace.update_source_record("arxiv", stats["converted"])
 
     if verbose:
         logger.info(

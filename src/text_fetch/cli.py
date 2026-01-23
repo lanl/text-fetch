@@ -907,6 +907,16 @@ def arxiv(ctx: click.Context) -> None:
     help="Add results to workspace (enables cross-search deduplication)",
 )
 @click.option("--grobid-url", help="GROBID service URL")
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoint if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -920,6 +930,8 @@ def arxiv_fetch(
     out: str,
     workspace: str | None,
     grobid_url: str | None,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -941,6 +953,12 @@ def arxiv_fetch(
 
         # Add to workspace for deduplication
         text-fetch arxiv fetch --categories q-bio.MN --workspace ./my-corpus --out ./output
+
+        # Resume interrupted fetch
+        text-fetch arxiv fetch --categories q-bio.MN --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch arxiv fetch --categories q-bio.MN --workspace ./my-corpus --update
     """
     import logging
     import sys
@@ -953,6 +971,10 @@ def arxiv_fetch(
         raise click.UsageError(
             "Either --config-file, --query, or --categories required"
         )
+
+    # Validate update flag
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     config = ctx.obj["config"]
 
@@ -1010,6 +1032,8 @@ def arxiv_fetch(
             max_results=max_results,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
     except RuntimeError as e:
         raise click.ClickException(str(e)) from e
@@ -1036,6 +1060,8 @@ def arxiv_fetch(
     click.echo(f"  Converted: {stats['converted']:,}")
     click.echo(f"    Valid: {stats['valid']:,}")
     click.echo(f"    Incomplete: {stats['incomplete']:,}")
+    if stats.get("resumed_from"):
+        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
     if stats.get("duplicates_skipped"):
         click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
