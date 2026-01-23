@@ -820,3 +820,213 @@ class TestWorkspaceCLI:
         ws_reloaded = Workspace.load(ws_path)
         assert ws_reloaded.get_statistics()["total_valid"] == 0
         assert ws_reloaded.get_statistics()["total_searches"] == 1
+
+
+# =============================================================================
+# From-Tarball Tests
+# =============================================================================
+
+
+class TestFromTarball:
+    """Tests for --from-tarball reproducibility feature."""
+
+    def test_extract_config_from_tarball(self, tmp_path: Path) -> None:
+        """Test extracting search config from tarball."""
+        from text_fetch.common import (
+            create_jats_tarball,
+            embed_provenance,
+            extract_search_config_from_tarball,
+        )
+
+        # Create output directory with valid files
+        output_dir = tmp_path / "output"
+        valid_dir = output_dir / "valid"
+        valid_dir.mkdir(parents=True)
+        (valid_dir / "test.xml").write_text("<article/>")
+
+        # Create tarball
+        tarball_path = tmp_path / "test.tar.gz"
+        create_jats_tarball(output_dir, tarball_path)
+
+        # Embed provenance with search config
+        search_config = {
+            "author": "hlavacek ws",
+            "sources": ["europepmc", "pmc"],
+            "max_results_per_source": 100,
+        }
+        provenance = {"test": True}
+        embed_provenance(tarball_path, search_config, provenance)
+
+        # Extract and verify
+        extracted = extract_search_config_from_tarball(tarball_path)
+        assert extracted is not None
+        assert extracted["author"] == "hlavacek ws"
+        assert extracted["sources"] == ["europepmc", "pmc"]
+
+    def test_extract_config_from_tarball_no_config(self, tmp_path: Path) -> None:
+        """Test extracting from tarball without embedded config."""
+        from text_fetch.common import (
+            create_jats_tarball,
+            extract_search_config_from_tarball,
+        )
+
+        # Create output directory
+        output_dir = tmp_path / "output"
+        valid_dir = output_dir / "valid"
+        valid_dir.mkdir(parents=True)
+        (valid_dir / "test.xml").write_text("<article/>")
+
+        # Create tarball without embedding provenance
+        tarball_path = tmp_path / "test.tar.gz"
+        create_jats_tarball(output_dir, tarball_path)
+
+        # Extract should return None
+        extracted = extract_search_config_from_tarball(tarball_path)
+        assert extracted is None
+
+    def test_fetch_from_tarball_cli_requires_option(self, tmp_path: Path) -> None:
+        """Test that fetch command requires config-file or from-tarball."""
+        from click.testing import CliRunner
+        from text_fetch.cli import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["fetch", "--out", str(tmp_path)])
+
+        assert result.exit_code != 0
+        assert "Either --config-file or --from-tarball" in result.output
+
+    def test_fetch_from_tarball_cli_mutually_exclusive(self, tmp_path: Path) -> None:
+        """Test that config-file and from-tarball are mutually exclusive."""
+        from click.testing import CliRunner
+        from text_fetch.cli import cli
+
+        runner = CliRunner()
+
+        # Create a dummy config and tarball
+        config_file = tmp_path / "config.json"
+        config_file.write_text('{"author": "test"}')
+
+        tarball = tmp_path / "test.tar.gz"
+        tarball.touch()
+
+        result = runner.invoke(
+            cli,
+            [
+                "fetch",
+                "--config-file",
+                str(config_file),
+                "--from-tarball",
+                str(tarball),
+                "--out",
+                str(tmp_path / "output"),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Cannot use both --config-file and --from-tarball" in result.output
+
+    def test_fetch_from_tarball_cli_no_config_in_tarball(self, tmp_path: Path) -> None:
+        """Test error when tarball has no embedded config."""
+        from click.testing import CliRunner
+        from text_fetch.cli import cli
+        from text_fetch.common import create_jats_tarball
+
+        runner = CliRunner()
+
+        # Create tarball without config
+        output_dir = tmp_path / "output"
+        valid_dir = output_dir / "valid"
+        valid_dir.mkdir(parents=True)
+        (valid_dir / "test.xml").write_text("<article/>")
+
+        tarball_path = tmp_path / "test.tar.gz"
+        create_jats_tarball(output_dir, tarball_path)
+
+        result = runner.invoke(
+            cli,
+            [
+                "fetch",
+                "--from-tarball",
+                str(tarball_path),
+                "--out",
+                str(tmp_path / "new_output"),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "No search config found in tarball" in result.output
+
+
+# =============================================================================
+# PDF Batch with Workspace Tests
+# =============================================================================
+
+
+class TestPDFBatchWorkspaceCLI:
+    """Tests for pdf batch --workspace CLI option."""
+
+    def test_pdf_batch_workspace_option_accepted(self, tmp_path: Path) -> None:
+        """Test that --workspace option is accepted by pdf batch."""
+        from click.testing import CliRunner
+        from text_fetch.cli import cli
+
+        runner = CliRunner()
+
+        # Create workspace
+        ws_path = tmp_path / "corpus"
+        Workspace.init(ws_path)
+
+        # Create PDF directory (empty for this test)
+        pdf_dir = tmp_path / "pdfs"
+        pdf_dir.mkdir()
+
+        result = runner.invoke(
+            cli,
+            [
+                "pdf",
+                "batch",
+                "--dir",
+                str(pdf_dir),
+                "--out",
+                str(tmp_path / "output"),
+                "--workspace",
+                str(ws_path),
+            ],
+        )
+
+        # Should succeed but find no PDFs
+        assert result.exit_code == 0
+        assert "No PDF files found" in result.output
+
+    def test_pdf_batch_with_workspace_shows_workspace_path(
+        self, tmp_path: Path
+    ) -> None:
+        """Test that pdf batch shows workspace path when --workspace used."""
+        from click.testing import CliRunner
+        from text_fetch.cli import cli
+
+        runner = CliRunner()
+
+        # Create workspace
+        ws_path = tmp_path / "corpus"
+        Workspace.init(ws_path)
+
+        # Create PDF directory with no PDFs
+        pdf_dir = tmp_path / "pdfs"
+        pdf_dir.mkdir()
+
+        result = runner.invoke(
+            cli,
+            [
+                "pdf",
+                "batch",
+                "--dir",
+                str(pdf_dir),
+                "--out",
+                str(tmp_path / "output"),
+                "--workspace",
+                str(ws_path),
+            ],
+        )
+
+        assert result.exit_code == 0
