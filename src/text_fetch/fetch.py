@@ -30,6 +30,8 @@ def unified_fetch(
     grobid_url: str | None = None,
     verbose: bool = False,
     progress_callback: Callable[[str, str, int, int], None] | None = None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch articles from multiple sources using unified config.
 
@@ -42,6 +44,8 @@ def unified_fetch(
         grobid_url: GROBID URL (required for arxiv, chemrxiv).
         verbose: Enable verbose logging.
         progress_callback: Optional callback(source, id, current, total).
+        resume: Resume from checkpoints for interrupted fetches.
+        update: Only fetch papers since last fetch (requires workspace).
 
     Returns:
         Statistics dict with per-source stats and deduplication info.
@@ -85,6 +89,8 @@ def unified_fetch(
                 grobid_url=grobid_url,
                 verbose=verbose,
                 progress_callback=progress_callback,
+                resume=resume,
+                update=update,
             )
             stats["per_source"][source] = source_stats
             stats["total_fetched"] += source_stats.get("fetched", 0)
@@ -121,6 +127,8 @@ def _fetch_from_source(
     grobid_url: str | None,
     verbose: bool,
     progress_callback: Callable[[str, str, int, int], None] | None,
+    resume: bool = False,
+    update: bool = False,
 ) -> dict[str, Any]:
     """Fetch from a single source."""
     # Get source-specific options
@@ -140,6 +148,8 @@ def _fetch_from_source(
             workspace=workspace,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
+            resume=resume,
+            update=update,
         )
 
     elif source == "europepmc":
@@ -153,6 +163,8 @@ def _fetch_from_source(
             open_access_only=config.open_access_only,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
+            resume=resume,
+            update=update,
         )
 
     elif source == "arxiv":
@@ -169,6 +181,8 @@ def _fetch_from_source(
             max_results=max_results,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
+            resume=resume,
+            update=update,
         )
 
     elif source in ("biorxiv", "medrxiv"):
@@ -183,6 +197,8 @@ def _fetch_from_source(
             grobid_url=grobid_url,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
+            resume=resume,
+            update=update,
             **params,
         )
 
@@ -199,6 +215,8 @@ def _fetch_from_source(
             grobid_url=grobid_url,
             verbose=verbose,
             progress_callback=_wrap_callback(progress_callback, source),
+            resume=resume,
+            update=update,
             **params,
         )
 

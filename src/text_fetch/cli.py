@@ -1911,6 +1911,16 @@ def europepmc_fetch(
     help="Comma-separated sources to use (overrides config)",
 )
 @click.option("--no-dedupe", is_flag=True, help="Disable DOI deduplication")
+@click.option(
+    "--resume",
+    is_flag=True,
+    help="Resume from checkpoints if interrupted",
+)
+@click.option(
+    "--update",
+    is_flag=True,
+    help="Only fetch papers since last fetch (requires workspace)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -1926,6 +1936,8 @@ def unified_fetch_cmd(
     grobid_url: str | None,
     sources: str | None,
     no_dedupe: bool,
+    resume: bool,
+    update: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -1950,6 +1962,12 @@ def unified_fetch_cmd(
 
         # Re-run fetch from existing tarball (reproducibility)
         text-fetch fetch --from-tarball corpus.tar.gz --out ./updated --tarball
+
+        # Resume interrupted fetch
+        text-fetch fetch --config-file search.json --out ./output --resume
+
+        # Update mode: fetch only new papers since last fetch
+        text-fetch fetch --config-file search.json --workspace ./corpus --update
     """
     import logging
     import sys
@@ -1964,6 +1982,8 @@ def unified_fetch_cmd(
         raise click.UsageError("Either --config-file or --from-tarball is required")
     if config_file and from_tarball:
         raise click.UsageError("Cannot use both --config-file and --from-tarball")
+    if update and not workspace:
+        raise click.UsageError("--update requires --workspace")
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -2069,6 +2089,8 @@ def unified_fetch_cmd(
             grobid_url=resolved_grobid,
             verbose=verbose,
             progress_callback=progress_callback,
+            resume=resume,
+            update=update,
         )
     finally:
         if progress_bar[0] is not None:
