@@ -2237,6 +2237,132 @@ def workspace_list_searches(path: str) -> None:
         click.echo(f"{search.id:<12} {timestamp:<20} {fetched:>5}/{valid:<4} {cmd}")
 
 
+@workspace.command(name="update")
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--source",
+    type=click.Choice(["europepmc", "biorxiv", "medrxiv", "arxiv", "chemrxiv", "pmc"]),
+    help="Only update specific source (default: all sources)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be fetched without downloading",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output")
+@click.pass_context
+def workspace_update_cmd(
+    ctx: click.Context,
+    path: str,
+    source: str | None,
+    dry_run: bool,
+    verbose: bool,
+) -> None:
+    """Re-run workspace searches to fetch new papers.
+
+    Fetches only papers published since the last fetch for each source.
+
+    \b
+    Examples:
+        # Update all sources
+        text-fetch workspace update ./my-corpus
+
+        # Update specific source
+        text-fetch workspace update ./my-corpus --source europepmc
+
+        # Show what would be fetched
+        text-fetch workspace update ./my-corpus --dry-run
+    """
+    import logging
+
+    from .workspace import Workspace, WorkspaceError
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+
+    try:
+        ws = Workspace.load(path)
+    except WorkspaceError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Workspace: {ws.manifest.name}")
+    click.echo(f"Path: {ws.path}")
+
+    # Get source records
+    source_records = ws.manifest.source_records
+
+    if not source_records:
+        click.echo("\nNo previous fetches recorded. Nothing to update.")
+        click.echo("Run a fetch command with --workspace first.")
+        return
+
+    # Filter by source if specified
+    sources_to_update = [source] if source else list(source_records.keys())
+
+    click.echo(f"\nSources to update: {', '.join(sources_to_update)}")
+
+    if dry_run:
+        click.echo("\n[DRY RUN] Would check for updates from:")
+        for src in sources_to_update:
+            record = source_records.get(src)
+            if record:
+                last_date = record.last_fetch[:10] if record.last_fetch else "never"
+                click.echo(f"  {src}: papers since {last_date}")
+            else:
+                click.echo(f"  {src}: no previous fetch (full fetch)")
+        click.echo("\nRun without --dry-run to fetch updates.")
+        return
+
+    # Actually perform updates
+    total_new = 0
+
+    for src in sources_to_update:
+        record = source_records.get(src)
+        if not record:
+            click.echo(f"\n{src}: No previous fetch recorded, skipping")
+            continue
+
+        last_date_str = record.last_fetch[:10] if record.last_fetch else "unknown"
+        click.echo(f"\n{src}: Checking for papers since {last_date_str}...")
+
+        # For now, only europepmc supports update mode
+        if src == "europepmc":
+            from .europepmc import fetch_europepmc
+
+            # Get the most recent search config for this source
+            searches = ws.get_searches()
+            search_config = None
+            for search in searches:
+                if search.config.get("source") == "europepmc":
+                    search_config = search.config
+                    break
+
+            if not search_config:
+                click.echo("  No previous search config found, skipping")
+                continue
+
+            stats = fetch_europepmc(
+                query=search_config.get("query"),
+                author=search_config.get("author"),
+                keywords=search_config.get("keywords"),
+                output_dir=str(ws.path),
+                workspace=ws,
+                max_results=search_config.get("max_results", 100),
+                open_access_only=search_config.get("open_access_only", True),
+                verbose=verbose,
+                update=True,
+            )
+
+            new_papers = stats.get("fetched", 0)
+            total_new += new_papers
+            click.echo(f"  Fetched {new_papers} new papers")
+        else:
+            click.echo(f"  Update mode not yet implemented for {src}")
+
+    click.echo(f"\n{'=' * 50}")
+    click.echo(f"Update complete: {total_new} new papers added")
+
+
 @workspace.command(name="clear")
 @click.argument("path", type=click.Path(exists=True))
 @click.option(
