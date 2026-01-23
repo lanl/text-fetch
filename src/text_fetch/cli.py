@@ -1402,5 +1402,274 @@ def config_cmd(ctx: click.Context, show: bool) -> None:
         click.echo("  2. ~/.config/text-fetch/config.toml")
 
 
+# =============================================================================
+# Workspace Commands
+# =============================================================================
+
+
+@cli.group()
+@click.pass_context
+def workspace(ctx: click.Context) -> None:
+    """Manage corpus workspaces for cross-search deduplication."""
+    pass
+
+
+@workspace.command(name="init")
+@click.argument("path", type=click.Path())
+@click.option("--name", help="Workspace name (defaults to directory name)")
+def workspace_init(path: str, name: str | None) -> None:
+    """Initialize a new workspace directory.
+
+    Creates a workspace with the following structure:
+    - .text-fetch/ (metadata directory)
+    - valid/ (complete JATS files)
+    - incomplete/ (incomplete JATS files)
+
+    \b
+    Examples:
+        text-fetch workspace init ./my-corpus
+        text-fetch workspace init ./my-corpus --name "Systems Biology"
+    """
+    from .workspace import Workspace, WorkspaceError
+
+    try:
+        ws = Workspace.init(path, name=name)
+        click.echo(f"Initialized workspace: {ws.path}")
+        click.echo(f"  Name: {ws.manifest.name}")
+    except WorkspaceError as e:
+        raise click.ClickException(str(e)) from e
+
+
+@workspace.command(name="status")
+@click.argument("path", type=click.Path(exists=True))
+def workspace_status(path: str) -> None:
+    """Show workspace statistics and status.
+
+    \b
+    Examples:
+        text-fetch workspace status ./my-corpus
+    """
+    from .workspace import Workspace, WorkspaceError
+
+    try:
+        ws = Workspace.load(path)
+    except WorkspaceError as e:
+        raise click.ClickException(str(e)) from e
+
+    stats = ws.get_statistics()
+
+    click.echo(f"Workspace: {stats['name']}")
+    click.echo(f"Path: {stats['path']}")
+    if stats["created"]:
+        click.echo(f"Created: {stats['created'][:19].replace('T', ' ')}")
+    if stats["updated"]:
+        click.echo(f"Updated: {stats['updated'][:19].replace('T', ' ')}")
+    click.echo()
+    click.echo("Statistics:")
+    click.echo(f"  Searches: {stats['total_searches']}")
+    click.echo(f"  Valid articles: {stats['total_valid']}")
+    click.echo(f"  Incomplete articles: {stats['total_incomplete']}")
+    click.echo(f"  Unique DOIs: {stats['unique_dois']}")
+    click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']}")
+
+    # Show recent searches
+    searches = ws.get_searches()
+    if searches:
+        click.echo()
+        click.echo("Recent searches:")
+        for search in searches[:5]:
+            timestamp = search.timestamp[:19].replace("T", " ")
+            fetched = search.statistics.get("fetched", "?")
+            cmd = search.command
+            if len(cmd) > 50:
+                cmd = cmd[:47] + "..."
+            click.echo(f"  {search.id} ({timestamp}): {fetched} articles")
+            click.echo(f"    {cmd}")
+
+
+@workspace.command(name="build")
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--tarball",
+    "tarball_name",
+    default=None,
+    help="Output tarball filename (default: workspace_corpus.tar.gz)",
+)
+@click.option(
+    "--out",
+    type=click.Path(),
+    help="Output directory for tarball (default: workspace directory)",
+)
+@click.option(
+    "--include-incomplete",
+    is_flag=True,
+    help="Include incomplete files in tarball",
+)
+@click.option(
+    "--compression",
+    type=click.Choice(["gz", "bz2", "none"]),
+    default="gz",
+    help="Compression type (default: gz)",
+)
+def workspace_build(
+    path: str,
+    tarball_name: str | None,
+    out: str | None,
+    include_incomplete: bool,
+    compression: str,
+) -> None:
+    """Build tarball from workspace contents.
+
+    Creates a tarball containing all JATS XML files from the workspace,
+    with provenance metadata embedded.
+
+    \b
+    Examples:
+        text-fetch workspace build ./my-corpus
+        text-fetch workspace build ./my-corpus --tarball corpus.tar.gz
+        text-fetch workspace build ./my-corpus --out ./final --include-incomplete
+    """
+    from .workspace import Workspace, WorkspaceError
+
+    try:
+        ws = Workspace.load(path)
+    except WorkspaceError as e:
+        raise click.ClickException(str(e)) from e
+
+    # Determine output path
+    output_dir = Path(out) if out else ws.path
+    default_name = f"{ws.manifest.name}_corpus.tar.gz"
+    tarball_path = output_dir / (tarball_name or default_name)
+
+    # Ensure output directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    click.echo(f"Building tarball from workspace: {ws.path}")
+
+    stats = ws.build_tarball(
+        output_path=tarball_path,
+        include_incomplete=include_incomplete,
+        compression=compression,
+    )
+
+    # Embed provenance
+    from .common import build_provenance, embed_provenance
+
+    workspace_stats = ws.get_statistics()
+    provenance = build_provenance(
+        stats=workspace_stats,
+        command=f"text-fetch workspace build {path}",
+        sources_queried=None,
+    )
+
+    # Build config summary from all searches
+    search_records = ws.get_searches()
+    search_config = {
+        "workspace": ws.manifest.name,
+        "searches": len(search_records),
+        "search_ids": [s.id for s in search_records],
+    }
+
+    embed_provenance(tarball_path, search_config, provenance)
+
+    click.echo(f"Created tarball: {tarball_path}")
+    click.echo(f"  Files included: {stats['files_included']}")
+    click.echo(f"  Valid: {stats['valid_count']}")
+    click.echo(f"  Incomplete: {stats['incomplete_count']}")
+    click.echo(f"  Size: {stats['bytes']:,} bytes")
+
+
+@workspace.command(name="list-searches")
+@click.argument("path", type=click.Path(exists=True))
+def workspace_list_searches(path: str) -> None:
+    """List all searches recorded in workspace.
+
+    \b
+    Examples:
+        text-fetch workspace list-searches ./my-corpus
+    """
+    from .workspace import Workspace, WorkspaceError
+
+    try:
+        ws = Workspace.load(path)
+    except WorkspaceError as e:
+        raise click.ClickException(str(e)) from e
+
+    searches = ws.get_searches()
+
+    if not searches:
+        click.echo("No searches recorded in this workspace.")
+        return
+
+    # Header
+    click.echo(f"{'ID':<12} {'Timestamp':<20} {'Articles':>10}  Command")
+    click.echo("-" * 80)
+
+    for search in searches:
+        timestamp = search.timestamp[:19].replace("T", " ")
+        fetched = search.statistics.get("fetched", 0)
+        valid = search.statistics.get("valid", 0)
+        cmd = search.command
+        if len(cmd) > 40:
+            cmd = cmd[:37] + "..."
+        click.echo(f"{search.id:<12} {timestamp:<20} {fetched:>5}/{valid:<4} {cmd}")
+
+
+@workspace.command(name="clear")
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--keep-history",
+    is_flag=True,
+    help="Keep search history but clear files",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Skip confirmation prompt",
+)
+def workspace_clear(path: str, keep_history: bool, force: bool) -> None:
+    """Clear workspace contents.
+
+    Removes all JATS files and resets the DOI index.
+    Optionally keeps search history with --keep-history.
+
+    \b
+    Examples:
+        text-fetch workspace clear ./my-corpus --keep-history
+        text-fetch workspace clear ./my-corpus --force
+    """
+    from .workspace import Workspace, WorkspaceError
+
+    try:
+        ws = Workspace.load(path)
+    except WorkspaceError as e:
+        raise click.ClickException(str(e)) from e
+
+    stats = ws.get_statistics()
+
+    if not force:
+        click.echo(f"Workspace: {stats['name']}")
+        click.echo(f"  Valid articles: {stats['total_valid']}")
+        click.echo(f"  Incomplete articles: {stats['total_incomplete']}")
+        click.echo(f"  Searches: {stats['total_searches']}")
+        if keep_history:
+            click.echo("\nThis will clear all files but keep search history.")
+        else:
+            click.echo("\nThis will clear ALL contents including search history.")
+
+        if not click.confirm("Proceed?"):
+            click.echo("Aborted.")
+            return
+
+    ws.clear(keep_history=keep_history)
+
+    click.echo(f"Cleared workspace: {ws.path}")
+    if keep_history:
+        click.echo("  Search history preserved.")
+    else:
+        click.echo("  All contents removed.")
+
+
 if __name__ == "__main__":
     cli()
