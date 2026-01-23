@@ -106,6 +106,11 @@ def pdf(ctx: click.Context) -> None:
     help="Output directory for JATS files",
 )
 @click.option(
+    "--workspace",
+    type=click.Path(),
+    help="Add results to workspace (enables cross-search deduplication)",
+)
+@click.option(
     "--grobid-url",
     default=None,
     help="GROBID service URL (default: from config or localhost:8070)",
@@ -166,6 +171,7 @@ def pdf_batch(
     ctx: click.Context,
     pdf_dir: str,
     output_dir: str,
+    workspace: str | None,
     grobid_url: str | None,
     xslt_path: str | None,
     prefer_fulltext: bool,
@@ -180,12 +186,23 @@ def pdf_batch(
     tarball_name: str | None,
     verbose: bool,
 ) -> None:
-    """Process PDF files in a directory via GROBID."""
+    """Process PDF files in a directory via GROBID.
+
+    \b
+    Examples:
+        # Basic batch processing
+        text-fetch pdf batch --dir ./PDFs --out ./output
+
+        # Add to workspace for deduplication
+        text-fetch pdf batch --dir ./PDFs --workspace ./my-corpus --out ./output
+    """
     import csv
+    import sys
     from pathlib import Path
 
     from text_fetch.grobid import get_default_xslt_path
     from text_fetch.pdf import find_pdfs, process_pdf_batch
+    from text_fetch.workspace import Workspace
 
     # Resolve XSLT path
     resolved_xslt = Path(xslt_path) if xslt_path else get_default_xslt_path()
@@ -205,6 +222,14 @@ def pdf_batch(
             )
             raise SystemExit(1)
 
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
+
     # Count PDFs
     pdfs = find_pdfs(pdf_dir)
     if not pdfs:
@@ -212,7 +237,10 @@ def pdf_batch(
         return
 
     click.echo(f"Found {len(pdfs)} PDF files in {pdf_dir}")
-    click.echo(f"Output directory: {output_dir}")
+    if ws:
+        click.echo(f"Workspace: {ws.path}")
+    else:
+        click.echo(f"Output directory: {output_dir}")
     click.echo(f"GROBID URL: {grobid}")
     if ocr:
         click.echo("OCR: enabled")
@@ -224,6 +252,7 @@ def pdf_batch(
     result = process_pdf_batch(
         pdf_dir=Path(pdf_dir),
         output_dir=Path(output_dir),
+        workspace=ws,
         grobid_url=grobid,
         xslt_path=resolved_xslt,
         prefer_fulltext=prefer_fulltext,
@@ -236,12 +265,25 @@ def pdf_batch(
         progress_callback=progress_callback,
     )
 
+    # Record search in workspace
+    if ws:
+        cmd = " ".join(sys.argv)
+        search_config = {
+            "source": "pdf",
+            "pdf_dir": pdf_dir,
+        }
+        ws.record_search(config=search_config, command=cmd, stats=result)
+
     # Summary
     click.echo("\nProcessing complete:")
     click.echo(f"  Total: {result['total']}")
     click.echo(f"  Valid: {result['valid']}")
     click.echo(f"  Incomplete: {result['incomplete']}")
+    if result.get("duplicates_skipped"):
+        click.echo(f"  Duplicates skipped: {result['duplicates_skipped']}")
     click.echo(f"  Errors: {result['errors']}")
+    if ws:
+        click.echo(f"\nWorkspace: {ws.path}")
 
     # CSV output
     if csv_path:
@@ -272,18 +314,23 @@ def pdf_batch(
                 writer.writerow(row)
         click.echo(f"Wrote metadata to {csv_path}")
 
-    # Create tarball if requested
-    cmd = f"text-fetch pdf batch --dir {pdf_dir} --out {output_dir}"
-    _handle_tarball_creation(
-        output_dir=output_dir,
-        tarball=tarball,
-        tarball_name=tarball_name,
-        stats=result,
-        search_config_dict=None,
-        command=cmd,
-        source="pdf",
-        verbose=verbose,
-    )
+    # Create tarball if requested (only if not using workspace)
+    if not ws:
+        cmd = f"text-fetch pdf batch --dir {pdf_dir} --out {output_dir}"
+        _handle_tarball_creation(
+            output_dir=output_dir,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=result,
+            search_config_dict=None,
+            command=cmd,
+            source="pdf",
+            verbose=verbose,
+        )
+    elif tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
+        )
 
 
 @cli.group()
@@ -1480,8 +1527,12 @@ def europepmc_fetch(
 @click.option(
     "--config-file",
     type=click.Path(exists=True),
-    required=True,
     help="JSON search configuration file",
+)
+@click.option(
+    "--from-tarball",
+    type=click.Path(exists=True),
+    help="Re-run fetch using config from existing tarball",
 )
 @click.option("--out", required=True, help="Output directory")
 @click.option(
@@ -1503,7 +1554,8 @@ def europepmc_fetch(
 @click.pass_context
 def unified_fetch_cmd(
     ctx: click.Context,
-    config_file: str,
+    config_file: str | None,
+    from_tarball: str | None,
     out: str,
     workspace: str | None,
     email: str | None,
@@ -1530,14 +1582,25 @@ def unified_fetch_cmd(
         text-fetch fetch --config-file input/search.json --no-dedupe --out ./output
 
         # Add to workspace for deduplication
-        text-fetch fetch --config-file input/search.json --workspace ./my-corpus --out ./output
+        text-fetch fetch --config-file input/search.json \\
+            --workspace ./my-corpus --out ./output
+
+        # Re-run fetch from existing tarball (reproducibility)
+        text-fetch fetch --from-tarball corpus.tar.gz --out ./updated --tarball
     """
     import logging
     import sys
 
+    from .common import extract_search_config_from_tarball
     from .fetch import unified_fetch
     from .query import SearchConfig, SearchConfigError
     from .workspace import Workspace
+
+    # Validate options
+    if not config_file and not from_tarball:
+        raise click.UsageError("Either --config-file or --from-tarball is required")
+    if config_file and from_tarball:
+        raise click.UsageError("Cannot use both --config-file and --from-tarball")
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
@@ -1563,11 +1626,28 @@ def unified_fetch_cmd(
         if verbose:
             click.echo(f"Using workspace: {ws_path}")
 
-    # Load search config
-    try:
-        search_config = SearchConfig.from_json(config_file)
-    except SearchConfigError as e:
-        raise click.UsageError(f"Invalid config: {e}") from e
+    # Load search config from file or tarball
+    config_source = config_file  # For display purposes
+    if from_tarball:
+        config_source = f"tarball:{from_tarball}"
+        config_data = extract_search_config_from_tarball(Path(from_tarball))
+        if not config_data:
+            raise click.ClickException(
+                f"No search config found in tarball: {from_tarball}"
+            )
+        try:
+            search_config = SearchConfig.from_dict(config_data)
+        except SearchConfigError as e:
+            raise click.ClickException(f"Invalid config in tarball: {e}") from e
+        if verbose:
+            click.echo(f"Loaded config from tarball: {from_tarball}")
+    else:
+        # config_file is not None here (validated above)
+        assert config_file is not None
+        try:
+            search_config = SearchConfig.from_json(config_file)
+        except SearchConfigError as e:
+            raise click.UsageError(f"Invalid config: {e}") from e
 
     # Override sources if specified
     if sources:
@@ -1586,7 +1666,7 @@ def unified_fetch_cmd(
         )
 
     # Show config summary
-    click.echo(f"Config: {config_file}")
+    click.echo(f"Config: {config_source}")
     click.echo(f"Sources: {', '.join(effective_sources)}")
     click.echo(f"Max per source: {search_config.max_results_per_source}")
     if ws:
@@ -1669,7 +1749,7 @@ def unified_fetch_cmd(
 
     # Create tarball if requested (only if not using workspace)
     if not ws:
-        cmd = f"text-fetch fetch --config-file {config_file} --out {out}"
+        cmd = f"text-fetch fetch --config-file {config_source} --out {out}"
         _handle_tarball_creation(
             output_dir=out,
             tarball=tarball,

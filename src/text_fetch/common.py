@@ -10,6 +10,7 @@ __all__ = [
     "create_tarball",
     "embed_provenance",
     "extract_doi_from_text",
+    "extract_search_config_from_tarball",
     "read_tarball_provenance",
     "sha1_of_bytes",
     "sha1_of_file",
@@ -330,7 +331,7 @@ def read_tarball_provenance(
         tarball_path: Path to the tarball.
 
     Returns:
-        Tuple of (search_config, provenance), either may be None if not found.
+        Tuple of (search_config, provenance), either may be None.
     """
     tarball_path = Path(tarball_path)
 
@@ -366,6 +367,24 @@ def read_tarball_provenance(
             pass  # File doesn't exist
 
     return search_config, provenance
+
+
+def extract_search_config_from_tarball(
+    tarball_path: Path | str,
+) -> dict[str, Any] | None:
+    """Extract search configuration from tarball's embedded provenance.
+
+    This is a convenience wrapper around read_tarball_provenance()
+    that returns just the search_config dict.
+
+    Args:
+        tarball_path: Path to the tarball.
+
+    Returns:
+        Search config dict if found, None otherwise.
+    """
+    search_config, _ = read_tarball_provenance(tarball_path)
+    return search_config
 
 
 def build_provenance(

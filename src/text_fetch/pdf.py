@@ -27,7 +27,7 @@ from text_fetch.grobid import GROBIDClient
 from text_fetch.pmc import JATSValidator, ValidationStatus
 
 if TYPE_CHECKING:
-    pass
+    from text_fetch.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +266,7 @@ def process_pdf(
 def process_pdf_batch(
     pdf_dir: Path,
     output_dir: Path,
+    workspace: Workspace | None = None,
     grobid_url: str = "http://localhost:8070",
     xslt_path: Path | str = "tei2jats.xsl",
     prefer_fulltext: bool = True,
@@ -281,7 +282,8 @@ def process_pdf_batch(
 
     Args:
         pdf_dir: Directory containing PDFs.
-        output_dir: Output directory for JATS files.
+        output_dir: Output directory for JATS files (if workspace is None).
+        workspace: Optional workspace for deduplication.
         grobid_url: GROBID service URL.
         xslt_path: Path to TEI→JATS stylesheet.
         prefer_fulltext: Use fulltext mode in GROBID.
@@ -304,18 +306,26 @@ def process_pdf_batch(
             "total": 0,
             "valid": 0,
             "incomplete": 0,
+            "duplicates_skipped": 0,
             "errors": 0,
             "results": [],
         }
 
-    # Set up directories
-    output_path = Path(output_dir)
-    valid_dir = output_path / "valid"
-    incomplete_dir = output_path / "incomplete"
-    tei_cache_dir = output_path / "tei_cache" if save_tei else None
+    # Set up directories based on workspace or output_dir
+    if workspace:
+        valid_dir = workspace.valid_dir
+        incomplete_dir = workspace.incomplete_dir
+        output_path = workspace.path
+        search_id = workspace._get_next_search_id()
+    else:
+        output_path = Path(output_dir)
+        valid_dir = output_path / "valid"
+        incomplete_dir = output_path / "incomplete"
+        search_id = None
+        valid_dir.mkdir(parents=True, exist_ok=True)
+        incomplete_dir.mkdir(parents=True, exist_ok=True)
 
-    valid_dir.mkdir(parents=True, exist_ok=True)
-    incomplete_dir.mkdir(parents=True, exist_ok=True)
+    tei_cache_dir = output_path / "tei_cache" if save_tei else None
     if tei_cache_dir:
         tei_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -334,6 +344,7 @@ def process_pdf_batch(
     results: list[PDFProcessingResult] = []
     valid_count = 0
     incomplete_count = 0
+    duplicates_skipped = 0
     error_count = 0
 
     validator = JATSValidator()
@@ -365,6 +376,15 @@ def process_pdf_batch(
                 except Exception as e:
                     result.notes.append(f"ncbi_error:{e}")
 
+            # Check for duplicate DOI in workspace
+            doi = result.metadata.get("DOI")
+            if workspace and doi and workspace.has_doi(doi):
+                logger.debug("Skipping duplicate: %s", doi)
+                duplicates_skipped += 1
+                result.notes.append("duplicate_doi_skipped")
+                results.append(result)
+                continue
+
             # Convert TEI to JATS
             tei_content: str | None = None
             if result.tei_path:
@@ -384,20 +404,43 @@ def process_pdf_batch(
                     # Validate
                     validation = validator.validate(jats_xml)
                     result.validation = validation.status
+                    is_valid = validation.status == ValidationStatus.VALID
 
-                    # Choose directory
-                    if validation.status == ValidationStatus.VALID:
-                        dest_dir = valid_dir
-                        valid_count += 1
+                    # Save to workspace or regular directory
+                    if workspace:
+                        # Use workspace.add_file for proper tracking
+                        jats_filename = f"{pdf_path.stem}.{result.sha1[:8]}.jats.xml"
+                        file_path = workspace.add_file(
+                            jats_content=jats_xml,
+                            doi=doi,
+                            source="pdf",
+                            search_id=search_id or "search_001",
+                            is_valid=is_valid,
+                            filename=jats_filename,
+                        )
+                        if file_path:
+                            result.jats_path = str(file_path)
+                            if is_valid:
+                                valid_count += 1
+                            else:
+                                incomplete_count += 1
+                        else:
+                            # File was skipped (duplicate)
+                            duplicates_skipped += 1
                     else:
-                        dest_dir = incomplete_dir
-                        incomplete_count += 1
+                        # Choose directory
+                        if is_valid:
+                            dest_dir = valid_dir
+                            valid_count += 1
+                        else:
+                            dest_dir = incomplete_dir
+                            incomplete_count += 1
 
-                    # Save JATS
-                    jats_filename = f"{pdf_path.stem}.{result.sha1[:8]}.jats.xml"
-                    jats_path = dest_dir / jats_filename
-                    jats_path.write_text(jats_xml, encoding="utf-8")
-                    result.jats_path = str(jats_path)
+                        # Save JATS
+                        jats_filename = f"{pdf_path.stem}.{result.sha1[:8]}.jats.xml"
+                        jats_path = dest_dir / jats_filename
+                        jats_path.write_text(jats_xml, encoding="utf-8")
+                        result.jats_path = str(jats_path)
                 else:
                     result.notes.append("jats_conversion_failed")
                     error_count += 1
@@ -425,6 +468,7 @@ def process_pdf_batch(
         "total": total,
         "valid": valid_count,
         "incomplete": incomplete_count,
+        "duplicates_skipped": duplicates_skipped,
         "errors": error_count,
         "results": [r.to_dict() for r in results],
     }
