@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-01-23
+
+### Added
+- **Resume Interrupted Fetches** - Continue large fetches after interruption
+  - `--resume` flag on `text-fetch europepmc fetch` command
+  - `FetchCheckpoint` dataclass for tracking progress (`checkpoint.py`)
+  - Checkpoint tracks completed/failed paper IDs
+  - Config hash validation to detect changed configs
+  - Periodic checkpoint saves (every 10 papers or 30 seconds)
+  - Helper functions: `get_checkpoint_path()`, `load_checkpoint_if_exists()`, `clear_checkpoint()`
+
+- **Update Mode for Incremental Corpus Updates** - Fetch only new papers since last fetch
+  - `--update` flag on `text-fetch europepmc fetch` command
+  - `SourceFetchRecord` dataclass for tracking per-source fetch timestamps
+  - `source_records` field in `WorkspaceManifest` for update tracking
+  - `update_source_record()` method to record fetch timestamps
+  - `get_source_record()` and `get_last_fetch_date()` helpers
+  - Automatic date filtering based on last fetch timestamp
+
+- **Workspace Update Command** - Re-run all workspace searches to get new papers
+  - `text-fetch workspace update` command
+  - `--dry-run` flag to preview what would be fetched
+  - `--source` option to update specific source only
+  - Shows papers since last fetch per source
+
+### CLI
+- `--resume` flag for resuming interrupted Europe PMC fetches
+- `--update` flag for incremental updates (requires `--workspace`)
+- `--update requires --workspace` validation
+- Summary shows "Resumed from: X completed" when resuming
+
+### Tests
+- Added 23 new tests for checkpoint system (`test_checkpoint.py`)
+- Total test count: 496 (all passing)
+
+### User Stories Implemented
+1. **Resume Interrupted Fetch** - "My fetch was downloading 500 papers when my laptop went to sleep. I want to resume where I left off."
+2. **Update Existing Corpus** - "I built a corpus 3 months ago. I want to fetch only papers published since then."
+3. **Workspace Refresh** - "I have a workspace with 5 searches. I want to re-run all of them to get new papers."
+
 ## [0.2.2] - 2026-01-23
 
 ### Added
