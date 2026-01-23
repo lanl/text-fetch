@@ -205,6 +205,46 @@ text-fetch europepmc fetch --author "smith" --include-non-oa --out ./output
 
 **Query syntax:** Uses Lucene syntax (`AUTH:`, `TITLE:`, `DOI:`, `KEYWORD:`, `FIRST_PDATE:`, etc.). See [Europe PMC documentation](https://europepmc.org/RestfulWebService).
 
+### Corpus Workspace (v0.2.0)
+
+Build a deduplicated corpus across multiple searches:
+
+```bash
+# Initialize workspace
+text-fetch workspace init ./my-corpus
+
+# Check workspace status
+text-fetch workspace status ./my-corpus
+
+# Build final tarball
+text-fetch workspace build ./my-corpus
+
+# List search history
+text-fetch workspace list-searches ./my-corpus
+
+# Clear workspace (keep search history)
+text-fetch workspace clear ./my-corpus --keep-history
+
+# Full reset
+text-fetch workspace clear ./my-corpus --force
+```
+
+**Workspace directory structure:**
+```
+my-corpus/
+├── .text-fetch/           # Metadata directory
+│   ├── workspace.json     # Workspace manifest
+│   ├── searches/          # Search history
+│   │   ├── search_001.json
+│   │   └── ...
+│   └── doi_index.json     # DOI deduplication index
+├── valid/                 # Complete JATS files
+│   └── *.xml
+├── incomplete/            # Incomplete JATS files
+│   └── *.xml
+└── manifest.json          # Standard manifest
+```
+
 ### Unified Multi-Source Fetch
 
 Fetch articles from multiple sources with a single JSON config file:
@@ -437,6 +477,51 @@ ls output/pdfs/
 
 cat metadata.csv  # CSV with extracted metadata
 ```
+
+### Workflow 5: Workspace Corpus (v0.2.0)
+
+Build a deduplicated corpus from multiple author searches:
+
+```bash
+# Initialize workspace
+text-fetch workspace init ./systems-biology-corpus --name "Systems Biology"
+
+# Add papers from multiple author searches
+# (when --workspace is integrated in v0.2.1)
+# For now, use the workspace Python API directly:
+python << 'EOF'
+from text_fetch import Workspace
+
+ws = Workspace.load("./systems-biology-corpus")
+
+# Add files programmatically
+ws.add_file(
+    jats_content="<article>...</article>",
+    doi="10.1234/example",
+    source="europepmc",
+    search_id="search_001",
+    is_valid=True,
+)
+
+# Record search
+ws.record_search(
+    config={"author": "hlavacek ws"},
+    command="text-fetch europepmc fetch --author 'hlavacek ws'",
+    stats={"fetched": 10, "valid": 8},
+)
+EOF
+
+# Check status
+text-fetch workspace status ./systems-biology-corpus
+
+# Build final tarball when done
+text-fetch workspace build ./systems-biology-corpus --tarball corpus.tar.gz
+```
+
+**Key benefits:**
+- **Cross-search deduplication** - Same DOI from different searches is only stored once
+- **Search history** - Track which searches contributed to the corpus
+- **Provenance** - Built tarballs include search metadata
 
 ## Development
 

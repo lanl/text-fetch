@@ -13,7 +13,8 @@ This document provides comprehensive API documentation for text-fetch's Python l
    - [ChemrxivClient](#chemrxivclient)
 4. [GROBID Client](#grobid-client)
 5. [PDF Processing](#pdf-processing)
-6. [Utilities](#utilities)
+6. [Corpus Workspace](#corpus-workspace)
+7. [Utilities](#utilities)
 
 ---
 
@@ -523,6 +524,255 @@ result = PDFProcessingResult(
 
 # Convert to dict for JSON serialization
 d = result.to_dict()
+```
+
+---
+
+## Corpus Workspace
+
+The workspace module provides workspace-based corpus management with cross-search deduplication.
+
+### Import
+
+```python
+from text_fetch import (
+    Workspace,
+    WorkspaceError,
+    WorkspaceManifest,
+    SearchRecord,
+    DOIIndex,
+)
+```
+
+### Workspace Class
+
+The `Workspace` class manages a corpus directory with DOI deduplication.
+
+**Creating a workspace:**
+
+```python
+from text_fetch import Workspace
+from pathlib import Path
+
+# Initialize new workspace
+ws = Workspace.init(Path("./my-corpus"), name="My Research Corpus")
+
+# Load existing workspace
+ws = Workspace.load(Path("./my-corpus"))
+
+# Load or initialize (convenient for scripts)
+ws = Workspace.load_or_init(Path("./my-corpus"), name="My Research Corpus")
+```
+
+**Adding files:**
+
+```python
+# Add a valid JATS file
+path = ws.add_file(
+    jats_content="<article>...</article>",
+    doi="10.1234/example",
+    source="europepmc",
+    search_id="search_001",
+    is_valid=True,
+)
+
+if path is None:
+    print("Duplicate DOI - skipped")
+else:
+    print(f"Saved to: {path}")
+
+# Add an incomplete file
+ws.add_file(
+    jats_content="<article>...</article>",
+    doi="10.5678/incomplete",
+    source="pmc",
+    search_id="search_001",
+    is_valid=False,
+)
+```
+
+**Recording searches:**
+
+```python
+# Record a search execution
+search_id = ws.record_search(
+    config={"author": "hlavacek ws", "source": "europepmc"},
+    command="text-fetch europepmc fetch --author 'hlavacek ws'",
+    stats={"fetched": 10, "valid": 8, "incomplete": 2},
+)
+print(f"Recorded as: {search_id}")  # "search_001"
+```
+
+**Checking DOIs:**
+
+```python
+# Check if DOI exists (case-insensitive)
+if ws.has_doi("10.1234/example"):
+    print("Already in workspace")
+```
+
+**Getting statistics:**
+
+```python
+stats = ws.get_statistics()
+print(f"Name: {stats['name']}")
+print(f"Total searches: {stats['total_searches']}")
+print(f"Valid files: {stats['total_valid']}")
+print(f"Incomplete files: {stats['total_incomplete']}")
+print(f"Unique DOIs: {stats['unique_dois']}")
+print(f"Duplicates skipped: {stats['duplicates_skipped']}")
+```
+
+**Getting search history:**
+
+```python
+searches = ws.get_searches()
+for search in searches:
+    print(f"{search.id}: {search.command}")
+    print(f"  Fetched: {search.statistics.get('fetched', 0)}")
+```
+
+**Building tarball:**
+
+```python
+from pathlib import Path
+
+stats = ws.build_tarball(
+    output_path=Path("./corpus.tar.gz"),
+    include_incomplete=False,
+)
+
+print(f"Files included: {stats['files_included']}")
+print(f"Bytes: {stats['bytes']}")
+```
+
+**Clearing workspace:**
+
+```python
+# Clear files but keep search history
+ws.clear(keep_history=True)
+
+# Full reset
+ws.clear(keep_history=False)
+```
+
+### DOIIndex Class
+
+Fast DOI lookup for deduplication.
+
+```python
+from text_fetch import DOIIndex
+from pathlib import Path
+
+# Create or load index
+index = DOIIndex(Path(".text-fetch/doi_index.json"))
+
+# Add DOI
+index.add(
+    doi="10.1234/example",
+    file_path="valid/pmc_10.1234_example.xml",
+    source="pmc",
+    search_id="search_001",
+)
+
+# Check existence (case-insensitive)
+if index.contains("10.1234/EXAMPLE"):
+    print("Found!")
+
+# Get metadata
+info = index.get("10.1234/example")
+if info:
+    print(f"File: {info['file']}")
+    print(f"Source: {info['source']}")
+    print(f"Added: {info['added']}")
+
+# Remove
+index.remove("10.1234/example")
+
+# Iterate
+for doi in index:
+    print(doi)
+
+# Clear all
+index.clear()
+```
+
+### WorkspaceManifest Dataclass
+
+Workspace metadata stored in `.text-fetch/workspace.json`.
+
+```python
+from text_fetch import WorkspaceManifest
+
+manifest = WorkspaceManifest(
+    version="1.0",
+    created="2025-01-22T12:00:00",
+    updated="2025-01-22T14:30:00",
+    name="my-corpus",
+    statistics={
+        "total_searches": 3,
+        "total_valid": 100,
+        "total_incomplete": 5,
+    },
+)
+
+# Convert to/from dict
+data = manifest.to_dict()
+manifest = WorkspaceManifest.from_dict(data)
+```
+
+### SearchRecord Dataclass
+
+Individual search execution record.
+
+```python
+from text_fetch import SearchRecord
+
+record = SearchRecord(
+    id="search_001",
+    timestamp="2025-01-22T12:00:00",
+    config={"author": "hlavacek ws"},
+    command="text-fetch europepmc fetch --author 'hlavacek ws'",
+    statistics={"fetched": 10, "valid": 8},
+)
+
+# Convert to/from dict
+data = record.to_dict()
+record = SearchRecord.from_dict(data)
+```
+
+### Workspace Directory Structure
+
+```
+my-corpus/
+├── .text-fetch/
+│   ├── workspace.json     # Workspace manifest
+│   ├── searches/          # Search history
+│   │   ├── search_001.json
+│   │   └── search_002.json
+│   └── doi_index.json     # DOI → location mapping
+├── valid/
+│   ├── pmc_10.1234_example.xml
+│   └── europepmc_PMC123456.xml
+├── incomplete/
+│   └── biorxiv_10.1101_2024.01.xml
+└── manifest.json          # Standard manifest
+```
+
+### Error Handling
+
+```python
+from text_fetch import Workspace, WorkspaceError
+
+try:
+    ws = Workspace.load(Path("./not-a-workspace"))
+except WorkspaceError as e:
+    print(f"Error: {e}")  # "Not a workspace: ./not-a-workspace"
+
+try:
+    Workspace.init(Path("./existing-workspace"))
+except WorkspaceError as e:
+    print(f"Error: {e}")  # "Workspace already exists: ./existing-workspace"
 ```
 
 ---

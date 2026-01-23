@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-01-22
+
+### Added
+- **Corpus Workspace** - Workspace-based corpus management with cross-search deduplication
+  - `text-fetch workspace init` - Initialize new workspace directory
+  - `text-fetch workspace status` - Show workspace statistics and search history
+  - `text-fetch workspace build` - Create tarball from workspace contents
+  - `text-fetch workspace list-searches` - Display all recorded search history
+  - `text-fetch workspace clear` - Reset workspace with optional history preservation
+  - `Workspace` class for managing corpus directories (`workspace.py`)
+  - `DOIIndex` class for fast DOI lookup with case-insensitive comparison
+  - `WorkspaceManifest` dataclass for workspace metadata
+  - `SearchRecord` dataclass for tracking search history
+  - Automatic DOI deduplication across multiple searches
+  - Search history tracking with statistics
+  - Provenance embedding in built tarballs
+
+### Workspace Features
+- **Cross-search deduplication** - Same DOI from different searches stored only once
+- **Search history** - Track which searches contributed to the corpus
+- **Unified tarball output** - Build final corpus with embedded provenance
+- **Flexible clearing** - Clear files while preserving search history
+
+### Workspace Directory Structure
+```
+workspace/
+├── .text-fetch/
+│   ├── workspace.json     # Workspace manifest
+│   ├── searches/          # Search history
+│   │   ├── search_001.json
+│   │   └── ...
+│   └── doi_index.json     # DOI → location mapping
+├── valid/                 # Complete JATS files
+├── incomplete/            # Incomplete JATS files
+└── manifest.json          # Standard manifest
+```
+
+### Tests
+- Added 51 new tests for workspace functionality (`test_workspace.py`)
+- DOIIndex unit tests (10 tests)
+- WorkspaceManifest/SearchRecord tests (5 tests)
+- Workspace class tests (22 tests)
+- Integration tests (3 tests)
+- CLI integration tests (11 tests)
+
 ## [0.1.9] - 2026-01-22
 
 ### Added
