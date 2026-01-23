@@ -239,9 +239,9 @@ class TestEbolaJsonIntegration:
     @pytest.fixture
     def ebola_config(self) -> SearchConfig:
         """Load ebola.json if it exists."""
-        ebola_path = Path("input/ebola.json")
+        ebola_path = Path("scripts/legacy/ebola.json")
         if not ebola_path.exists():
-            pytest.skip("input/ebola.json not found")
+            pytest.skip("scripts/legacy/ebola.json not found")
         return SearchConfig.from_json(ebola_path)
 
     def test_ebola_loads(self, ebola_config: SearchConfig):
