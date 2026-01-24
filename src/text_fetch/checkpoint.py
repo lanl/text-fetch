@@ -243,13 +243,16 @@ class FetchCheckpoint:
         return any(entry["id"] == paper_id for entry in self.failed)
 
     def should_skip(self, paper_id: str) -> bool:
-        """Check if a paper should be skipped (completed or failed).
+        """Check if a paper should be skipped on resume.
+
+        Only skips completed papers. Failed papers will be retried,
+        which is the intended behavior for transient errors.
 
         Args:
             paper_id: Paper identifier to check.
 
         Returns:
-            True if paper should be skipped.
+            True if paper was successfully completed and should be skipped.
         """
         return self.is_complete(paper_id)
 

@@ -537,8 +537,8 @@ def fetch_arxiv(
         if verbose:
             logger.info("Fetch complete, checkpoint cleared")
 
-    # Update workspace source record
-    if workspace:
+    # Update workspace source record only if no errors
+    if workspace and stats["errors"] == 0:
         workspace.update_source_record("arxiv", stats["converted"])
 
     if verbose:

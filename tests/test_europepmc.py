@@ -1,10 +1,12 @@
 """Tests for Europe PMC client."""
 
 from datetime import datetime
+from pathlib import Path
 
 from text_fetch.europepmc import (
     EuropePMCArticle,
     EuropePMCClient,
+    fetch_europepmc,
 )
 
 
@@ -497,3 +499,222 @@ class TestEuropePMCClient:
         articles = list(client.iter_search("test", max_results=5))
 
         assert len(articles) == 5
+
+
+class TestFetchEuropepmc:
+    """Tests for fetch_europepmc function."""
+
+    def test_mark_failed_called_on_fetch_none(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """mark_failed is called when get_full_text_xml returns None."""
+        # Mock search to return one article with PMCID
+        search_response = {
+            "hitCount": 1,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345",
+                        "source": "PMC",
+                        "pmcid": "PMC123456",
+                        "title": "Test Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # Mock get_full_text_xml to return None (404)
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/fullTextXML",
+            status_code=404,
+        )
+
+        stats = fetch_europepmc(
+            query="test",
+            output_dir=tmp_path,
+            max_results=1,
+        )
+
+        assert stats["errors"] == 1
+        assert stats["fetched"] == 0
+
+        # Check checkpoint contains failed ID
+        checkpoint_path = tmp_path / ".text-fetch" / "checkpoint.json"
+        if checkpoint_path.exists():
+            import json
+
+            checkpoint_data = json.loads(checkpoint_path.read_text())
+            failed_ids = [f["id"] for f in checkpoint_data.get("failed", [])]
+            assert "PMC123456" in failed_ids
+
+    def test_checkpoint_contains_failed_ids(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """Checkpoint records failed IDs when fetch fails."""
+        # Mock search
+        search_response = {
+            "hitCount": 2,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "1",
+                        "source": "PMC",
+                        "pmcid": "PMC111111",
+                        "title": "Article 1",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                    {
+                        "id": "2",
+                        "source": "PMC",
+                        "pmcid": "PMC222222",
+                        "title": "Article 2",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # First article fails
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC111111/fullTextXML",
+            status_code=500,
+        )
+        # Second article succeeds
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC222222/fullTextXML",
+            text="<article><body>Test content</body></article>",
+        )
+
+        stats = fetch_europepmc(
+            query="test",
+            output_dir=tmp_path,
+            max_results=2,
+        )
+
+        assert stats["errors"] == 1
+        assert stats["fetched"] == 1
+
+    def test_update_source_record_not_called_on_errors(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """update_source_record not called when there are errors."""
+        from unittest.mock import patch
+
+        from text_fetch.workspace import Workspace
+
+        # Create workspace
+        ws = Workspace.init(tmp_path / "corpus")
+
+        # Mock search to return one article
+        search_response = {
+            "hitCount": 1,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345",
+                        "source": "PMC",
+                        "pmcid": "PMC123456",
+                        "title": "Test Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # Mock get_full_text_xml to fail
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/fullTextXML",
+            status_code=500,
+        )
+
+        # Spy on update_source_record using patch
+        with patch.object(
+            ws, "update_source_record", wraps=ws.update_source_record
+        ) as mock_update:
+            stats = fetch_europepmc(
+                query="test",
+                workspace=ws,
+                max_results=1,
+            )
+
+            assert stats["errors"] == 1
+            # update_source_record should NOT have been called due to errors
+            mock_update.assert_not_called()
+
+    def test_update_source_record_called_on_success(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """update_source_record called when no errors."""
+        from unittest.mock import patch
+
+        from text_fetch.workspace import Workspace
+
+        # Create workspace
+        ws = Workspace.init(tmp_path / "corpus")
+
+        # Mock search to return one article
+        search_response = {
+            "hitCount": 1,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345",
+                        "source": "PMC",
+                        "pmcid": "PMC123456",
+                        "title": "Test Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # Mock get_full_text_xml to succeed
+        valid_xml = """<?xml version="1.0"?>
+        <article>
+            <front>
+                <article-meta>
+                    <article-id pub-id-type="pmcid">PMC123456</article-id>
+                    <title-group>
+                        <article-title>Test Article Title</article-title>
+                    </title-group>
+                </article-meta>
+            </front>
+            <body><p>Test content body.</p></body>
+        </article>"""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/fullTextXML",
+            text=valid_xml,
+        )
+
+        # Spy on update_source_record using patch
+        with patch.object(
+            ws, "update_source_record", wraps=ws.update_source_record
+        ) as mock_update:
+            stats = fetch_europepmc(
+                query="test",
+                workspace=ws,
+                max_results=1,
+            )
+
+            assert stats["errors"] == 0
+            assert stats["fetched"] == 1
+            # update_source_record SHOULD have been called
+            mock_update.assert_called_once()

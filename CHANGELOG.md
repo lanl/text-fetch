@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-01-23
+
+### Fixed
+- **EuropePMC Checkpoint Fix** - Failed IDs are now properly recorded in checkpoint
+  - When `get_full_text_xml()` returns `None`, `mark_failed()` is now called
+  - Failed items will be retried on `--resume` (previously they were silently skipped)
+  - Checkpoint now correctly tracks both completed and failed IDs
+
+- **Update Mode Error Handling** - Workspace timestamp only advances on successful fetches
+  - `update_source_record()` is now only called when `errors == 0`
+  - Affects all 5 fetcher modules: europepmc, pmc, biorxiv, arxiv, chemrxiv
+  - Prevents `--update` from skipping failed items on subsequent runs
+
+- **Checkpoint Docstring** - Fixed misleading docstring for `should_skip()` method
+  - Clarified that only completed papers are skipped (not failed ones)
+  - Failed papers are intentionally retried for transient errors
+
+### Tests
+- Added 4 new tests for checkpoint/resume bug fixes (`test_europepmc.py`)
+  - `test_mark_failed_called_on_fetch_none`
+  - `test_checkpoint_contains_failed_ids`
+  - `test_update_source_record_not_called_on_errors`
+  - `test_update_source_record_called_on_success`
+
 ## [0.2.5] - 2026-01-23
 
 ### Added

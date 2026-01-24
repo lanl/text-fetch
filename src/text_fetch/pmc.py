@@ -773,8 +773,8 @@ def fetch_pmc(
     if not workspace:
         write_manifest(output_path, manifest, metadata={"query": effective_query})
 
-    # Update workspace source record
-    if workspace:
+    # Update workspace source record only if no errors
+    if workspace and stats["errors"] == 0:
         workspace.update_source_record("pmc", stats["fetched"])
 
     if verbose:

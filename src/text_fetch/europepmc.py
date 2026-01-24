@@ -616,6 +616,8 @@ def fetch_europepmc(
             xml_content = client.get_full_text_xml(article_pmcid)
             if xml_content is None:
                 stats["errors"] += 1
+                checkpoint.mark_failed(article_pmcid, "Failed to fetch full-text XML")
+                checkpoint.save_if_needed(checkpoint_path)
                 continue
             stats["fetched"] += 1
 
@@ -668,8 +670,8 @@ def fetch_europepmc(
         if verbose:
             logger.info("Fetch complete, checkpoint cleared")
 
-    # Update workspace source record
-    if workspace:
+    # Update workspace source record only if no errors
+    if workspace and stats["errors"] == 0:
         workspace.update_source_record(
             "europepmc",
             stats["fetched"],
