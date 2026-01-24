@@ -8,12 +8,16 @@ __all__ = [
     "clean",
     "create_jats_tarball",
     "create_tarball",
+    "create_tarball_from_files",
     "embed_provenance",
+    "embed_validation_summary",
     "extract_doi_from_text",
     "extract_search_config_from_tarball",
+    "find_jats_files",
     "read_tarball_provenance",
     "sha1_of_bytes",
     "sha1_of_file",
+    "validate_and_collect_stats",
 ]
 
 import hashlib
@@ -412,3 +416,235 @@ def build_provenance(
         "sources_queried": sources_queried or stats.get("sources", []),
         "statistics": stats,
     }
+
+
+# =============================================================================
+# Standalone Tarball Creation Functions (v0.2.5)
+# =============================================================================
+
+
+def find_jats_files(
+    directories: list[Path],
+    pattern: str = "*.xml",
+    recursive: bool = False,
+    include_incomplete: bool = False,
+) -> list[Path]:
+    """Find JATS/XML files in specified directories.
+
+    Args:
+        directories: List of directories to search.
+        pattern: Glob pattern for XML files (default: *.xml).
+        recursive: Search recursively if True.
+        include_incomplete: Include files in 'incomplete/' subdirs if True.
+
+    Returns:
+        Sorted list of unique XML file paths.
+    """
+    files: list[Path] = []
+
+    for directory in directories:
+        dir_path = Path(directory)
+
+        if not dir_path.is_dir():
+            continue
+
+        if recursive:
+            xml_files = list(dir_path.rglob(pattern))
+        else:
+            xml_files = list(dir_path.glob(pattern))
+
+        for f in xml_files:
+            # Skip incomplete/ directories unless explicitly included
+            if not include_incomplete and "incomplete" in f.parts:
+                continue
+            # Only include actual files
+            if f.is_file():
+                files.append(f)
+
+    # Dedupe and sort
+    return sorted(set(files))
+
+
+def validate_and_collect_stats(
+    files: list[Path],
+    validate: bool = True,
+    verbose: bool = False,
+) -> dict[str, Any]:
+    """Validate JATS files and collect statistics.
+
+    Args:
+        files: List of XML file paths to validate.
+        validate: If True, validate files using JATSValidator.
+        verbose: If True, print validation details.
+
+    Returns:
+        Statistics dict with keys:
+            - valid_files: List of valid file paths
+            - invalid_files: List of invalid file paths
+            - total_files: Total number of files checked
+            - valid_count: Number of valid files
+            - invalid_count: Number of invalid files
+            - total_bytes: Total size of all files in bytes
+    """
+    from .pmc import JATSValidator, ValidationStatus
+
+    valid_files: list[Path] = []
+    invalid_files: list[Path] = []
+    total_bytes = 0
+
+    validator = JATSValidator()
+
+    for f in files:
+        try:
+            file_size = f.stat().st_size
+            total_bytes += file_size
+
+            if validate:
+                content = f.read_text(encoding="utf-8")
+                result = validator.validate(content)
+                if result.status == ValidationStatus.VALID:
+                    valid_files.append(f)
+                else:
+                    invalid_files.append(f)
+                    if verbose:
+                        # Import click only when needed for verbose output
+                        import click
+
+                        issues = (
+                            ", ".join(result.errors) if result.errors else "unknown"
+                        )
+                        click.echo(f"  Invalid: {f.name} - {issues}")
+            else:
+                # Skip validation - include all files
+                valid_files.append(f)
+        except Exception as e:
+            invalid_files.append(f)
+            if verbose:
+                import click
+
+                click.echo(f"  Error reading {f.name}: {e}")
+
+    return {
+        "valid_files": valid_files,
+        "invalid_files": invalid_files,
+        "total_files": len(files),
+        "valid_count": len(valid_files),
+        "invalid_count": len(invalid_files),
+        "total_bytes": total_bytes,
+    }
+
+
+def create_tarball_from_files(
+    files: list[Path],
+    output_path: Path,
+    csv_path: Path | None = None,
+    compression: str = "gz",
+) -> dict[str, Any]:
+    """Create tarball from a list of XML files.
+
+    Creates a flat tarball structure with all XML files at the root level.
+
+    Args:
+        files: List of XML file paths to include.
+        output_path: Output tarball path.
+        csv_path: Optional CSV file to include as metadata.csv.
+        compression: Compression type - "gz", "bz2", or "none".
+
+    Returns:
+        Statistics dict with keys:
+            - files_included: Number of files added
+            - bytes: Tarball size in bytes
+            - uncompressed_bytes: Total uncompressed size
+    """
+    # Determine compression mode
+    mode_map = {
+        "gz": "w:gz",
+        "bz2": "w:bz2",
+        "none": "w",
+    }
+    mode = mode_map.get(compression, "w:gz")
+
+    total_uncompressed = 0
+
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tarfile.open(output_path, mode) as tar:
+        for f in files:
+            # Use flat structure (filename only, no directory)
+            tar.add(f, arcname=f.name)
+            total_uncompressed += f.stat().st_size
+
+        # Include CSV if provided
+        if csv_path and csv_path.exists():
+            tar.add(csv_path, arcname="metadata.csv")
+            total_uncompressed += csv_path.stat().st_size
+
+    return {
+        "files_included": len(files),
+        "bytes": output_path.stat().st_size,
+        "uncompressed_bytes": total_uncompressed,
+    }
+
+
+def embed_validation_summary(
+    tarball_path: Path,
+    summary: dict[str, Any],
+) -> None:
+    """Add validation_summary.json to tarball's .text-fetch/ directory.
+
+    Args:
+        tarball_path: Path to the tarball to modify.
+        summary: Validation summary dict to embed.
+    """
+    tarball_path = Path(tarball_path)
+
+    # Determine compression from filename
+    name_str = str(tarball_path)
+    is_gz = tarball_path.suffix == ".gz" or name_str.endswith(".tar.gz")
+    is_bz2 = tarball_path.suffix == ".bz2" or name_str.endswith(".tar.bz2")
+    if is_gz:
+        read_mode = "r:gz"
+        write_mode = "w:gz"
+    elif is_bz2:
+        read_mode = "r:bz2"
+        write_mode = "w:bz2"
+    else:
+        read_mode = "r"
+        write_mode = "w"
+
+    # Create a temporary file for the new tarball
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".tar") as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        with (
+            tarfile.open(tarball_path, read_mode) as old_tar,
+            tarfile.open(tmp_path, write_mode) as new_tar,
+        ):
+            # Copy all existing members
+            for member in old_tar.getmembers():
+                # Skip existing validation_summary.json
+                if member.name == ".text-fetch/validation_summary.json":
+                    continue
+                if member.isfile():
+                    f = old_tar.extractfile(member)
+                    if f:
+                        new_tar.addfile(member, f)
+                else:
+                    new_tar.addfile(member)
+
+            # Add validation_summary.json
+            summary_json = json.dumps(summary, indent=2).encode("utf-8")
+            summary_info = tarfile.TarInfo(name=".text-fetch/validation_summary.json")
+            summary_info.size = len(summary_json)
+            summary_info.mtime = int(time.time())
+            new_tar.addfile(summary_info, io.BytesIO(summary_json))
+
+        # Replace original with new tarball
+        tmp_path.replace(tarball_path)
+    except Exception:
+        # Clean up temp file on error
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise

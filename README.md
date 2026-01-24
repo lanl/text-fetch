@@ -686,6 +686,68 @@ text-fetch workspace update ./my-corpus --source arxiv --grobid-url http://local
 - **Config validation** - Changing search criteria resets the checkpoint
 - **Workspace integration** - `--update` requires `--workspace` for date tracking
 
+### Workflow 8: Create Tarball from Existing Files (v0.2.5)
+
+Create tarballs from existing JATS files without re-running a fetch:
+
+```bash
+# Scenario 1: Forgot to use --tarball during fetch
+text-fetch tarball create --xml-dir ./output/valid --out ./corpus.tar.gz
+
+# Scenario 2: Combine multiple directories into one tarball
+text-fetch tarball create \
+  --xml-dir ./pmc/valid \
+  --xml-dir ./europepmc/valid \
+  --xml-dir ./biorxiv/valid \
+  --out ./combined_corpus.tar.gz
+
+# Scenario 3: Include metadata CSV
+text-fetch tarball create \
+  --xml-dir ./output/valid \
+  --csv ./output/metadata.csv \
+  --out ./corpus.tar.gz
+
+# Scenario 4: Recursive search with custom pattern
+text-fetch tarball create \
+  --xml-dir ./output \
+  --recursive \
+  --pattern "*.jats.xml" \
+  --out ./corpus.tar.gz
+
+# Scenario 5: Skip validation (faster)
+text-fetch tarball create \
+  --xml-dir ./output \
+  --no-validate \
+  --out ./unvalidated.tar.gz
+
+# Scenario 6: Include incomplete files
+text-fetch tarball create \
+  --xml-dir ./output/valid \
+  --xml-dir ./output/incomplete \
+  --include-incomplete \
+  --out ./full_corpus.tar.gz
+```
+
+**Options:**
+- `--xml-dir` / `-d` - Directory containing JATS/XML files (repeatable)
+- `--out` / `-o` - Output tarball path (.tar.gz)
+- `--csv` - Include metadata CSV in tarball
+- `--recursive` / `-r` - Recursively search directories
+- `--pattern` - Glob pattern for XML files (default: `*.xml`)
+- `--include-incomplete` - Include files from incomplete/ directories
+- `--validate/--no-validate` - Toggle JATS validation (default: validate)
+- `--compression` - Compression type: gz, bz2, none (default: gz)
+
+**Output structure:**
+```
+corpus.tar.gz
+├── .text-fetch/
+│   ├── provenance.json           # Creation metadata
+│   └── validation_summary.json   # Files included/excluded
+├── metadata.csv                  # If --csv provided
+└── *.xml                         # JATS files (flat structure)
+```
+
 ## Development
 
 ```bash

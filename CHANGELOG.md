@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-01-23
+
+### Added
+- **Standalone Tarball Command** - Create tarballs from existing JATS files without re-running a fetch
+  - `text-fetch tarball create` command for packaging existing files
+  - `--xml-dir` option (repeatable) for specifying source directories
+  - `--out` option for output tarball path
+  - `--csv` option to include metadata CSV in tarball
+  - `--recursive` flag for recursive directory scanning
+  - `--pattern` option for custom glob patterns (default: `*.xml`)
+  - `--include-incomplete` flag to include incomplete/ subdirectories
+  - `--validate/--no-validate` toggle for JATS validation (default: validate)
+  - `--compression` option for compression type (gz, bz2, none)
+  - `find_jats_files()` function for file discovery
+  - `validate_and_collect_stats()` function for file validation
+  - `create_tarball_from_files()` function for tarball creation
+  - `embed_validation_summary()` function for validation metadata
+
+### User Stories Implemented
+1. **Post-Processing Tarball** - "I processed 235 PDFs through GROBID but forgot to use `--tarball`. I don't want to re-run the entire batch—just create the tarball from existing files."
+2. **Combine Multiple Sources** - "I ran separate fetches to different directories. Now I want to combine them into a single tarball for litkit."
+3. **Custom Collection** - "I manually curated a collection of JATS files from various sources. I need to package them with proper provenance metadata."
+4. **Exclude Incomplete** - "I want a tarball with only valid files, excluding incomplete ones, without re-processing."
+
+### Output Tarball Structure
+```
+corpus.tar.gz
+├── .text-fetch/
+│   ├── provenance.json           # Creation metadata
+│   └── validation_summary.json   # Files included/excluded
+├── metadata.csv                  # If --csv provided
+└── *.jats.xml                   # JATS files (flat structure)
+```
+
+### CLI Examples
+```bash
+# Create tarball from single directory
+text-fetch tarball create --xml-dir ./output/valid --out ./corpus.tar.gz
+
+# Combine multiple directories
+text-fetch tarball create \
+  --xml-dir ./pmc/valid \
+  --xml-dir ./europepmc/valid \
+  --out ./combined_corpus.tar.gz
+
+# Recursive search with custom pattern
+text-fetch tarball create \
+  --xml-dir ./output \
+  --recursive \
+  --pattern "*.jats.xml" \
+  --out ./corpus.tar.gz
+
+# Skip validation (faster)
+text-fetch tarball create \
+  --xml-dir ./output \
+  --no-validate \
+  --out ./unvalidated.tar.gz
+```
+
+### Tests
+- Added 21 new tests for tarball command functions
+- Total test count: 517 (all passing)
+
 ## [0.2.4] - 2026-01-23
 
 ### Added
