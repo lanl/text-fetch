@@ -568,12 +568,11 @@ Process a local directory of PDFs (e.g., downloaded papers, grants).
 # Start GROBID
 ./scripts/start_grobid.sh
 
-# Process PDF directory (with OCR for scanned PDFs)
+# Process PDF directory 
 text-fetch pdf batch \
   --dir ./Manuscripts \
   --out ./output/pdfs \
   --csv metadata.csv \
-  --ocr \
   --resolve-ncbi \
   --email your.email@example.com \
   --verbose
