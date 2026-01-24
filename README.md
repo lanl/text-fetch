@@ -48,6 +48,22 @@ Configuration can also be set via environment variables:
 
 Priority: CLI options > environment variables > config file
 
+## Getting Help
+
+Use `--help` after any command to see available options:
+
+```bash
+# List all command groups
+uv run text-fetch --help
+
+# List subcommands in a group
+uv run text-fetch pmc --help
+
+# Show options for a specific command
+uv run text-fetch pmc fetch --help
+uv run text-fetch workspace update --help
+```
+
 ## Commands
 
 ### Show Configuration
