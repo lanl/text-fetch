@@ -568,11 +568,12 @@ Process a local directory of PDFs (e.g., downloaded papers, grants).
 # Start GROBID
 ./scripts/start_grobid.sh
 
-# Process PDF directory
+# Process PDF directory (with OCR for scanned PDFs)
 text-fetch pdf batch \
   --dir ./Manuscripts \
   --out ./output/pdfs \
   --csv metadata.csv \
+  --ocr \
   --resolve-ncbi \
   --email your.email@example.com \
   --verbose
@@ -585,6 +586,10 @@ ls output/pdfs/
 
 cat metadata.csv  # CSV with extracted metadata
 ```
+
+**Note:** The `--ocr` flag enables OCR processing for scanned PDFs. This improves
+extraction quality for older papers that are image-based. Without OCR, GROBID may
+fail to extract titles and abstracts from scanned documents.
 
 ### Workflow 5: Workspace Corpus
 
