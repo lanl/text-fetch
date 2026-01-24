@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.6] - 2026-01-23
 
+### Changed
+- **CLI Refactoring** - Split monolithic cli.py (~1,900 lines) into maintainable submodules
+  - New `cli/` package structure with 12 focused modules
+  - Each module handles a single command group (pdf, pmc, arxiv, etc.)
+  - All 534 tests pass unchanged (100% backward compatible)
+  - CLI help output and behavior identical to v0.2.5
+  - Module structure:
+    - `cli/__init__.py` - Main CLI group + config command (~70 lines)
+    - `cli/_common.py` - Shared helpers (~70 lines)
+    - `cli/pdf.py` - PDF batch commands (~150 lines)
+    - `cli/pmc.py` - PMC commands (~500 lines)
+    - `cli/arxiv.py` - arXiv commands (~150 lines)
+    - `cli/biorxiv.py` - bioRxiv commands (~190 lines)
+    - `cli/medrxiv.py` - medRxiv commands (~190 lines)
+    - `cli/chemrxiv.py` - ChemRxiv commands (~200 lines)
+    - `cli/europepmc.py` - Europe PMC commands (~220 lines)
+    - `cli/fetch.py` - Unified fetch command (~270 lines)
+    - `cli/workspace.py` - Workspace commands (~440 lines)
+    - `cli/tarball.py` - Tarball commands (~220 lines)
+
 ### Fixed
 - **EuropePMC Checkpoint Fix** - Failed IDs are now properly recorded in checkpoint
   - When `get_full_text_xml()` returns `None`, `mark_failed()` is now called

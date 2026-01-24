@@ -69,11 +69,24 @@ text-fetch is a data acquisition utility that sits upstream of [litkit](https://
 text-fetch/
 ├── src/text_fetch/
 │   ├── __init__.py       # Package exports
-│   ├── cli.py            # Click-based CLI (main entry point)
+│   ├── cli/              # CLI package (v0.2.6 - refactored from cli.py)
+│   │   ├── __init__.py   # Main CLI group + config command (~70 lines)
+│   │   ├── _common.py    # Shared helpers (handle_tarball_creation)
+│   │   ├── pdf.py        # PDF batch commands (~150 lines)
+│   │   ├── pmc.py        # PMC commands (~500 lines)
+│   │   ├── arxiv.py      # arXiv commands (~150 lines)
+│   │   ├── biorxiv.py    # bioRxiv commands (~190 lines)
+│   │   ├── medrxiv.py    # medRxiv commands (~190 lines)
+│   │   ├── chemrxiv.py   # ChemRxiv commands (~200 lines)
+│   │   ├── europepmc.py  # Europe PMC commands (~220 lines)
+│   │   ├── fetch.py      # Unified fetch command (~270 lines)
+│   │   ├── workspace.py  # Workspace commands (~440 lines)
+│   │   └── tarball.py    # Tarball commands (~220 lines)
 │   ├── config.py         # TOML configuration handling
 │   ├── common.py         # Shared utilities (RateLimiter, clean, sha1_of_file)
 │   ├── fetch.py          # Unified multi-source fetch orchestrator (v0.1.6)
 │   ├── query.py          # SearchConfig and query builders
+│   ├── checkpoint.py     # Resume checkpoint handling (v0.2.3)
 │   ├── workspace.py      # Workspace corpus management (v0.2.0)
 │   ├── grobid.py         # GROBIDClient for PDF→TEI→JATS
 │   ├── ncbi.py           # NCBIClient for E-utilities
