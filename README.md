@@ -2,7 +2,7 @@
 
 **Acquire scientific literature for RAG pipelines.**
 
-text-fetch provides a unified interface for acquiring full-text scientific literature from multiple sources and converting it to JATS XML format for downstream RAG (Retrieval-Augmented Generation) pipelines. The output is designed for use with [litkit](https://github.com/lanl/litkit) and [chatty](https://github.com/lanl/chatty).
+uv run text-fetch provides a unified interface for acquiring full-text scientific literature from multiple sources and converting it to JATS XML format for downstream RAG (Retrieval-Augmented Generation) pipelines. The output is designed for use with [litkit](https://github.com/lanl/litkit) and [chatty](https://github.com/lanl/chatty).
 
 ## Installation
 
@@ -28,7 +28,7 @@ uv run text-fetch --version
 
 ## Configuration
 
-text-fetch uses a TOML configuration file. Create `text-fetch.toml` in your project directory or `~/.config/text-fetch/config.toml` for global settings.
+uv run text-fetch uses a TOML configuration file. Create `text-fetch.toml` in your project directory or `~/.config/text-fetch/config.toml` for global settings.
 
 ```toml
 # text-fetch.toml
@@ -53,7 +53,7 @@ Priority: CLI options > environment variables > config file
 ### Show Configuration
 
 ```bash
-text-fetch config
+uv run text-fetch config
 ```
 
 ### PubMed Central
@@ -63,13 +63,13 @@ text-fetch config
 Fetch articles by PubMed query:
 
 ```bash
-text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output
+uv run text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output
 
 # Resume interrupted fetch
-text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output --resume
+uv run text-fetch pmc fetch --query "hlavacek ws[author]" --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch (requires workspace)
-text-fetch pmc fetch --query "hlavacek ws[author]" --workspace ./my-corpus --update
+uv run text-fetch pmc fetch --query "hlavacek ws[author]" --workspace ./my-corpus --update
 ```
 
 #### Sync PMC Open Access Corpus
@@ -78,26 +78,26 @@ Download and maintain a local mirror of the PMC Open Access subset:
 
 ```bash
 # Check for updates (dry-run, shows what would be downloaded)
-text-fetch pmc sync --storage /Volumes/External/pmc-oa
+uv run text-fetch pmc sync --storage /Volumes/External/pmc-oa
 
 # Download updates (actually fetches files)
-text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
+uv run text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
 
 # Sync specific subset (oa_comm, oa_noncomm, oa_other)
-text-fetch pmc sync --storage ./pmc-oa --subset oa_comm --download
+uv run text-fetch pmc sync --storage ./pmc-oa --subset oa_comm --download
 
 # Verify existing files match expected sizes
-text-fetch pmc sync --storage ./pmc-oa --verify
+uv run text-fetch pmc sync --storage ./pmc-oa --verify
 
 # Test with limited files
-text-fetch pmc sync --storage ./test-pmc --max-files 10 --download -y
+uv run text-fetch pmc sync --storage ./test-pmc --max-files 10 --download -y
 ```
 
 #### Check PMC OA Mirror Status
 
 ```bash
 # Show status of local mirror
-text-fetch pmc status --storage /Volumes/External/pmc-oa
+uv run text-fetch pmc status --storage /Volumes/External/pmc-oa
 # PMC OA Local Mirror
 # ========================================
 # Storage: /Volumes/External/pmc-oa
@@ -117,7 +117,7 @@ If you've manually downloaded PMC OA files, register them with the sync manifest
 
 ```bash
 # Import existing .tar.gz files into sync manifest
-text-fetch pmc import --storage /Volumes/External/pmc-oa
+uv run text-fetch pmc import --storage /Volumes/External/pmc-oa
 # Scanning /Volumes/External/pmc-oa for .tar.gz files...
 # ==================================================
 # Import complete!
@@ -127,7 +127,7 @@ text-fetch pmc import --storage /Volumes/External/pmc-oa
 #   Manifest: /Volumes/External/pmc-oa/sync_manifest.json
 
 # Import only specific subset
-text-fetch pmc import --storage ./pmc-oa --subset oa_comm
+uv run text-fetch pmc import --storage ./pmc-oa --subset oa_comm
 ```
 
 **Subsets:**
@@ -139,17 +139,17 @@ text-fetch pmc import --storage ./pmc-oa --subset oa_comm
 
 ```bash
 # 1. If you have existing downloads, import them first
-text-fetch pmc import --storage /Volumes/External/pmc-oa
+uv run text-fetch pmc import --storage /Volumes/External/pmc-oa
 
 # 2. Check what's new (dry-run)
-text-fetch pmc sync --storage /Volumes/External/pmc-oa
+uv run text-fetch pmc sync --storage /Volumes/External/pmc-oa
 # Shows: 56,789 new files (~278 GB)
 
 # 3. Download updates
-text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
+uv run text-fetch pmc sync --storage /Volumes/External/pmc-oa --download
 
 # 4. Verify downloads (optional)
-text-fetch pmc sync --storage /Volumes/External/pmc-oa --verify
+uv run text-fetch pmc sync --storage /Volumes/External/pmc-oa --verify
 ```
 
 ### arXiv
@@ -161,22 +161,22 @@ Fetch preprints from arXiv (converts PDFs via GROBID):
 ./scripts/start_grobid.sh
 
 # Search by author
-text-fetch arxiv fetch --query 'au:"hlavacek ws"' --out ./output
+uv run text-fetch arxiv fetch --query 'au:"hlavacek ws"' --out ./output
 
 # Search by category
-text-fetch arxiv fetch --categories q-bio.MN --out ./output
+uv run text-fetch arxiv fetch --categories q-bio.MN --out ./output
 
 # Search with multiple categories
-text-fetch arxiv fetch --categories q-bio.MN --categories cs.AI --out ./output
+uv run text-fetch arxiv fetch --categories q-bio.MN --categories cs.AI --out ./output
 
 # Using JSON config
-text-fetch arxiv fetch --config-file input/search.json --out ./output
+uv run text-fetch arxiv fetch --config-file input/search.json --out ./output
 
 # Resume interrupted fetch
-text-fetch arxiv fetch --categories q-bio.MN --out ./output --resume
+uv run text-fetch arxiv fetch --categories q-bio.MN --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
-text-fetch arxiv fetch --categories q-bio.MN --workspace ./my-corpus --update
+uv run text-fetch arxiv fetch --categories q-bio.MN --workspace ./my-corpus --update
 ```
 
 ### bioRxiv
@@ -185,22 +185,22 @@ Fetch preprints from bioRxiv (direct JATS XML when available, falls back to PDFâ
 
 ```bash
 # Recent preprints by category
-text-fetch biorxiv fetch --days 30 --category systems_biology --out ./output
+uv run text-fetch biorxiv fetch --days 30 --category systems_biology --out ./output
 
 # Date range
-text-fetch biorxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+uv run text-fetch biorxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
 
 # Specific DOIs
-text-fetch biorxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+uv run text-fetch biorxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
 
 # Multiple DOIs
-text-fetch biorxiv fetch --doi 10.1101/2024.01.15.111111 --doi 10.1101/2024.01.15.222222 --out ./output
+uv run text-fetch biorxiv fetch --doi 10.1101/2024.01.15.111111 --doi 10.1101/2024.01.15.222222 --out ./output
 
 # Resume interrupted fetch
-text-fetch biorxiv fetch --days 30 --out ./output --resume
+uv run text-fetch biorxiv fetch --days 30 --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
-text-fetch biorxiv fetch --days 30 --workspace ./my-corpus --update
+uv run text-fetch biorxiv fetch --days 30 --workspace ./my-corpus --update
 ```
 
 **Categories:** See `BIORXIV_CATEGORIES` in the code for all 27 supported categories (e.g., `systems_biology`, `bioinformatics`, `genomics`).
@@ -211,19 +211,19 @@ Fetch preprints from medRxiv (direct JATS XML when available, falls back to PDFâ
 
 ```bash
 # Recent epidemiology preprints
-text-fetch medrxiv fetch --days 30 --category epidemiology --out ./output
+uv run text-fetch medrxiv fetch --days 30 --category epidemiology --out ./output
 
 # Date range
-text-fetch medrxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
+uv run text-fetch medrxiv fetch --start-date 2024-01-01 --end-date 2024-01-31 --out ./output
 
 # Specific DOIs
-text-fetch medrxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
+uv run text-fetch medrxiv fetch --doi 10.1101/2024.01.15.123456 --out ./output
 
 # Resume interrupted fetch
-text-fetch medrxiv fetch --days 30 --out ./output --resume
+uv run text-fetch medrxiv fetch --days 30 --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
-text-fetch medrxiv fetch --days 30 --workspace ./my-corpus --update
+uv run text-fetch medrxiv fetch --days 30 --workspace ./my-corpus --update
 ```
 
 **Categories:** See `MEDRXIV_CATEGORIES` in the code for all 52 supported categories (e.g., `epidemiology`, `infectious_diseases`, `public_and_global_health`).
@@ -237,25 +237,25 @@ Fetch preprints from ChemRxiv (requires GROBID - no native JATS available):
 ./scripts/start_grobid.sh
 
 # Search by term
-text-fetch chemrxiv fetch --term "catalysis" --out ./output
+uv run text-fetch chemrxiv fetch --term "catalysis" --out ./output
 
 # Filter by category
-text-fetch chemrxiv fetch --category organic_chemistry --out ./output
+uv run text-fetch chemrxiv fetch --category organic_chemistry --out ./output
 
 # Date range
-text-fetch chemrxiv fetch --date-from 2024-01-01 --date-to 2024-12-31 --out ./output
+uv run text-fetch chemrxiv fetch --date-from 2024-01-01 --date-to 2024-12-31 --out ./output
 
 # Specific item IDs
-text-fetch chemrxiv fetch --item-id item_2024-abc123 --out ./output
+uv run text-fetch chemrxiv fetch --item-id item_2024-abc123 --out ./output
 
 # Combined filters
-text-fetch chemrxiv fetch --term "synthesis" --category organic_chemistry --max-results 50 --out ./output
+uv run text-fetch chemrxiv fetch --term "synthesis" --category organic_chemistry --max-results 50 --out ./output
 
 # Resume interrupted fetch
-text-fetch chemrxiv fetch --term "catalysis" --out ./output --resume
+uv run text-fetch chemrxiv fetch --term "catalysis" --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
-text-fetch chemrxiv fetch --term "catalysis" --workspace ./my-corpus --update
+uv run text-fetch chemrxiv fetch --term "catalysis" --workspace ./my-corpus --update
 ```
 
 **Categories:** See `CHEMRXIV_CATEGORIES` in the code for all 22 supported categories (e.g., `organic_chemistry`, `inorganic_chemistry`, `biochemistry`, `catalysis`).
@@ -266,28 +266,28 @@ Fetch articles from Europe PMC (native JATS XML - no GROBID required):
 
 ```bash
 # Search by author
-text-fetch europepmc fetch --author "hlavacek ws" --out ./output
+uv run text-fetch europepmc fetch --author "hlavacek ws" --out ./output
 
 # Search with keywords
-text-fetch europepmc fetch --keyword "systems biology" --out ./output
+uv run text-fetch europepmc fetch --keyword "systems biology" --out ./output
 
 # Date range
-text-fetch europepmc fetch --author "perelson" --date-from 2020-01-01 --out ./output
+uv run text-fetch europepmc fetch --author "perelson" --date-from 2020-01-01 --out ./output
 
 # Raw Lucene query
-text-fetch europepmc fetch --query 'AUTH:"hlavacek" AND TITLE:modeling' --out ./output
+uv run text-fetch europepmc fetch --query 'AUTH:"hlavacek" AND TITLE:modeling' --out ./output
 
 # Specific PMC IDs
-text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 --out ./output
+uv run text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 --out ./output
 
 # Include non-open-access results
-text-fetch europepmc fetch --author "smith" --include-non-oa --out ./output
+uv run text-fetch europepmc fetch --author "smith" --include-non-oa --out ./output
 
 # Resume interrupted fetch
-text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
+uv run text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
-text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
+uv run text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
 ```
 
 **Key advantages:**
@@ -304,31 +304,31 @@ Build a deduplicated corpus across multiple searches:
 
 ```bash
 # Initialize workspace
-text-fetch workspace init ./my-corpus
+uv run text-fetch workspace init ./my-corpus
 
 # Check workspace status
-text-fetch workspace status ./my-corpus
+uv run text-fetch workspace status ./my-corpus
 
 # Build final tarball
-text-fetch workspace build ./my-corpus
+uv run text-fetch workspace build ./my-corpus
 
 # List search history
-text-fetch workspace list-searches ./my-corpus
+uv run text-fetch workspace list-searches ./my-corpus
 
 # Clear workspace (keep search history)
-text-fetch workspace clear ./my-corpus --keep-history
+uv run text-fetch workspace clear ./my-corpus --keep-history
 
 # Full reset
-text-fetch workspace clear ./my-corpus --force
+uv run text-fetch workspace clear ./my-corpus --force
 
 # Update workspace: re-run searches to fetch new papers
-text-fetch workspace update ./my-corpus
+uv run text-fetch workspace update ./my-corpus
 
 # Preview what would be fetched
-text-fetch workspace update ./my-corpus --dry-run
+uv run text-fetch workspace update ./my-corpus --dry-run
 
 # Update specific source only
-text-fetch workspace update ./my-corpus --source europepmc
+uv run text-fetch workspace update ./my-corpus --source europepmc
 ```
 
 **Workspace directory structure:**
@@ -369,19 +369,19 @@ cat > input/hlavacek.json << 'EOF'
 EOF
 
 # Fetch from all sources in config
-text-fetch fetch --config-file input/hlavacek.json --out ./output
+uv run text-fetch fetch --config-file input/hlavacek.json --out ./output
 
 # Override sources from command line
-text-fetch fetch --config-file input/hlavacek.json --sources pmc,europepmc --out ./output
+uv run text-fetch fetch --config-file input/hlavacek.json --sources pmc,europepmc --out ./output
 
 # Disable DOI deduplication
-text-fetch fetch --config-file input/hlavacek.json --no-dedupe --out ./output
+uv run text-fetch fetch --config-file input/hlavacek.json --no-dedupe --out ./output
 
 # Resume interrupted multi-source fetch
-text-fetch fetch --config-file input/hlavacek.json --out ./output --resume
+uv run text-fetch fetch --config-file input/hlavacek.json --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
-text-fetch fetch --config-file input/hlavacek.json --workspace ./my-corpus --update
+uv run text-fetch fetch --config-file input/hlavacek.json --workspace ./my-corpus --update
 ```
 
 **Config options:**
@@ -422,7 +422,7 @@ Process local PDFs via GROBID and convert to JATS XML:
 ./scripts/start_grobid.sh
 
 # Process PDFs
-text-fetch pdf ./Manuscripts --out ./output
+uv run text-fetch pdf ./Manuscripts --out ./output
 ```
 
 #### OCR Support for Scanned PDFs
@@ -434,7 +434,7 @@ For scanned or image-based PDFs, you need the **full GROBID image** with Tessera
 ./scripts/start_grobid_with_ocr.sh
 
 # Process scanned PDFs
-text-fetch pdf batch --dir ./Manuscripts --out ./output --ocr
+uv run text-fetch pdf batch --dir ./Manuscripts --out ./output --ocr
 ```
 
 **Important:** The `--ocr` flag **requires** the full GROBID image (`grobid:X.X.X-full`). 
@@ -516,7 +516,7 @@ cat > input/hlavacek.json << 'EOF'
 EOF
 
 # Run unified fetch
-text-fetch fetch \
+uv run text-fetch fetch \
   --config-file input/hlavacek.json \
   --email your.email@example.com \
   --out ./output/hlavacek
@@ -559,7 +559,7 @@ EOF
 ./scripts/start_grobid.sh
 
 # Fetch preprints
-text-fetch fetch \
+uv run text-fetch fetch \
   --config-file input/preprints.json \
   --grobid-url http://localhost:8070 \
   --out ./output/preprints
@@ -584,7 +584,7 @@ cat > input/recent.json << 'EOF'
 EOF
 
 # Fetch recent articles
-text-fetch fetch \
+uv run text-fetch fetch \
   --config-file input/recent.json \
   --email your.email@example.com \
   --out ./output/recent
@@ -602,7 +602,7 @@ Process a local directory of PDFs (e.g., downloaded papers, grants).
 ./scripts/start_grobid.sh
 
 # Process PDF directory 
-text-fetch pdf batch \
+uv run text-fetch pdf batch \
   --dir ./Manuscripts \
   --out ./output/pdfs \
   --csv metadata.csv \
@@ -629,28 +629,28 @@ Build a deduplicated corpus from multiple author searches:
 
 ```bash
 # Initialize workspace
-text-fetch workspace init ./systems-biology-corpus --name "Systems Biology"
+uv run text-fetch workspace init ./systems-biology-corpus --name "Systems Biology"
 
 # Add papers from multiple author searches (--workspace option)
-text-fetch europepmc fetch --author "hlavacek ws" \
+uv run text-fetch europepmc fetch --author "hlavacek ws" \
   --workspace ./systems-biology-corpus --out ./tmp
 # Fetched 45 articles (45 valid, 0 incomplete)
 
-text-fetch europepmc fetch --author "perelson as" \
+uv run text-fetch europepmc fetch --author "perelson as" \
   --workspace ./systems-biology-corpus --out ./tmp
 # Fetched 52 articles (38 valid, 2 incomplete, 12 duplicates skipped)
 
-text-fetch biorxiv fetch --days 30 --category systems_biology \
+uv run text-fetch biorxiv fetch --days 30 --category systems_biology \
   --workspace ./systems-biology-corpus --out ./tmp
 # Fetched 23 articles (21 valid, 2 incomplete, 0 duplicates skipped)
 
 # Process local PDFs into workspace
-text-fetch pdf batch --dir ./Manuscripts \
+uv run text-fetch pdf batch --dir ./Manuscripts \
   --workspace ./systems-biology-corpus --out ./tmp
 # Processed 10 PDFs (8 valid, 2 incomplete, 0 duplicates skipped)
 
 # Check status
-text-fetch workspace status ./systems-biology-corpus
+uv run text-fetch workspace status ./systems-biology-corpus
 # Workspace: Systems Biology
 # Valid articles: 112
 # Incomplete articles: 6
@@ -659,7 +659,7 @@ text-fetch workspace status ./systems-biology-corpus
 # Searches: 4
 
 # Build final tarball when done
-text-fetch workspace build ./systems-biology-corpus --tarball corpus.tar.gz
+uv run text-fetch workspace build ./systems-biology-corpus --tarball corpus.tar.gz
 ```
 
 **Key benefits:**
@@ -673,10 +673,10 @@ Re-run a fetch from an existing tarball's embedded configuration:
 
 ```bash
 # First, create a tarball with embedded config
-text-fetch fetch --config-file input/hlavacek.json --out ./output --tarball
+uv run text-fetch fetch --config-file input/hlavacek.json --out ./output --tarball
 
 # Later, reproduce the same fetch (e.g., for updates)
-text-fetch fetch --from-tarball ./output/unified_corpus.tar.gz \
+uv run text-fetch fetch --from-tarball ./output/unified_corpus.tar.gz \
   --out ./updated --tarball
 ```
 
@@ -692,25 +692,25 @@ Resume interrupted fetches and update existing corpora with new papers:
 ```bash
 # Scenario 1: Resume interrupted fetch
 # Your laptop went to sleep during a large fetch - resume where you left off
-text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
+uv run text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
 # "Resumed from: 127 completed, continuing..."
 
 # Scenario 2: Update existing workspace
 # You built a corpus 3 months ago, now want only new papers since then
-text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
+uv run text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
 # "Checking for papers since 2025-10-23..."
 
 # Scenario 3: Update all sources in workspace
-text-fetch workspace update ./my-corpus
+uv run text-fetch workspace update ./my-corpus
 # "europepmc: 15 new papers"
 # "biorxiv: 8 new papers"
 # "Total: 23 new papers added"
 
 # Preview updates without downloading
-text-fetch workspace update ./my-corpus --dry-run
+uv run text-fetch workspace update ./my-corpus --dry-run
 
 # Update specific source only
-text-fetch workspace update ./my-corpus --source arxiv --grobid-url http://localhost:8070
+uv run text-fetch workspace update ./my-corpus --source arxiv --grobid-url http://localhost:8070
 ```
 
 **Key features:**
@@ -725,36 +725,36 @@ Create tarballs from existing JATS files without re-running a fetch:
 
 ```bash
 # Scenario 1: Forgot to use --tarball during fetch
-text-fetch tarball create --xml-dir ./output/valid --out ./corpus.tar.gz
+uv run text-fetch tarball create --xml-dir ./output/valid --out ./corpus.tar.gz
 
 # Scenario 2: Combine multiple directories into one tarball
-text-fetch tarball create \
+uv run text-fetch tarball create \
   --xml-dir ./pmc/valid \
   --xml-dir ./europepmc/valid \
   --xml-dir ./biorxiv/valid \
   --out ./combined_corpus.tar.gz
 
 # Scenario 3: Include metadata CSV
-text-fetch tarball create \
+uv run text-fetch tarball create \
   --xml-dir ./output/valid \
   --csv ./output/metadata.csv \
   --out ./corpus.tar.gz
 
 # Scenario 4: Recursive search with custom pattern
-text-fetch tarball create \
+uv run text-fetch tarball create \
   --xml-dir ./output \
   --recursive \
   --pattern "*.jats.xml" \
   --out ./corpus.tar.gz
 
 # Scenario 5: Skip validation (faster)
-text-fetch tarball create \
+uv run text-fetch tarball create \
   --xml-dir ./output \
   --no-validate \
   --out ./unvalidated.tar.gz
 
 # Scenario 6: Include incomplete files
-text-fetch tarball create \
+uv run text-fetch tarball create \
   --xml-dir ./output/valid \
   --xml-dir ./output/incomplete \
   --include-incomplete \
