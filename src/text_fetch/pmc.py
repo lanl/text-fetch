@@ -39,7 +39,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Minimum body content threshold (characters) for "valid" status
-BODY_MIN_CHARS = 1000
+# Matches litkit's fallback: uses first 800 chars of body if no title/abstract
+BODY_MIN_CHARS = 800
 
 # JATS namespace - used in GROBID-generated files
 JATS_NS = "http://jats.nlm.nih.gov"
@@ -82,11 +83,14 @@ class JATSValidator:
     """Validates JATS/NXML documents for completeness.
 
     Validation criteria for "valid" status (aligned with litkit requirements):
-    - Has non-empty <article-title>
-    - Has non-empty <abstract>
+    - Has non-empty <article-title> OR non-empty <abstract>, OR
     - Has <body> with >= BODY_MIN_CHARS characters of content
 
-    Documents missing any required element are marked "incomplete".
+    litkit uses title+abstract for Stage 1 embedding, but falls back to
+    the first 800 chars of body if neither is present. Therefore, a doc
+    is usable if it has (title or abstract) or sufficient body content.
+
+    Documents with no usable content are marked "incomplete".
     Invalid XML is marked "invalid".
 
     Example:
@@ -150,8 +154,11 @@ class JATSValidator:
                     f"(minimum: {self.body_min_chars})"
                 )
 
-        # Determine status
-        if has_title and has_abstract and has_body:
+        # Determine status (aligned with litkit acceptance criteria)
+        # Valid if: (title OR abstract) OR (body >= min chars)
+        # litkit can use title+abstract for embedding, or fall back to body
+        has_metadata = has_title or has_abstract
+        if has_metadata or has_body:
             status = ValidationStatus.VALID
         else:
             status = ValidationStatus.INCOMPLETE

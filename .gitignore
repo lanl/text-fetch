@@ -28,3 +28,4 @@ text-fetch.toml
 /pubmed_access.py
 prompt.rtf
 .coverage
+output/

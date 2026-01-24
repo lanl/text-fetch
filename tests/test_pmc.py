@@ -209,43 +209,77 @@ for the body validation check to pass successfully.</p></body>
         assert result.pmcid == "PMC12345"
 
     def test_validate_missing_abstract(self):
-        """Article without abstract is incomplete."""
+        """Article without abstract but with title is valid (litkit fallback)."""
         validator = JATSValidator(body_min_chars=100)
         result = validator.validate(self.NO_ABSTRACT_JATS)
 
-        assert result.status == ValidationStatus.INCOMPLETE
+        # New criteria: (title OR abstract) OR body >= min
+        # Has title, so VALID
+        assert result.status == ValidationStatus.VALID
         assert result.has_title is True
         assert result.has_abstract is False
-        assert "Missing or empty <abstract>" in result.errors
+        assert (
+            "Missing or empty <abstract>" in result.errors
+        )  # Error noted but still valid
 
     def test_validate_missing_body(self):
-        """Article without body is incomplete."""
+        """Article without body but with title+abstract is valid."""
         validator = JATSValidator()
         result = validator.validate(self.NO_BODY_JATS)
 
-        assert result.status == ValidationStatus.INCOMPLETE
+        # New criteria: (title OR abstract) OR body >= min
+        # Has title AND abstract, so VALID
+        assert result.status == ValidationStatus.VALID
         assert result.has_title is True
         assert result.has_abstract is True
         assert result.has_body is False
-        assert any("body" in e.lower() for e in result.errors)
+        assert any(
+            "body" in e.lower() for e in result.errors
+        )  # Error noted but still valid
 
     def test_validate_empty_title(self):
-        """Article with empty title tag is incomplete."""
+        """Article with empty title but has abstract is valid."""
         validator = JATSValidator(body_min_chars=100)
         result = validator.validate(self.EMPTY_TITLE_JATS)
 
-        assert result.status == ValidationStatus.INCOMPLETE
+        # New criteria: (title OR abstract) OR body >= min
+        # Has abstract, so VALID
+        assert result.status == ValidationStatus.VALID
         assert result.has_title is False
-        assert "Missing or empty <article-title>" in result.errors
+        assert (
+            "Missing or empty <article-title>" in result.errors
+        )  # Error noted but still valid
 
     def test_validate_short_body(self):
-        """Article with body below threshold is incomplete."""
+        """Article with short body but has title+abstract is valid."""
         validator = JATSValidator(body_min_chars=1000)
         result = validator.validate(self.SHORT_BODY_JATS)
 
-        assert result.status == ValidationStatus.INCOMPLETE
+        # New criteria: (title OR abstract) OR body >= min
+        # Has title AND abstract, so VALID
+        assert result.status == ValidationStatus.VALID
         assert result.has_body is False
-        assert any("too short" in e.lower() for e in result.errors)
+        assert any(
+            "too short" in e.lower() for e in result.errors
+        )  # Error noted but still valid
+
+    def test_validate_truly_incomplete(self):
+        """Article with no title, no abstract, and short body is incomplete."""
+        truly_incomplete_xml = """<?xml version="1.0"?>
+<article>
+<front><article-meta>
+<title-group><article-title></article-title></title-group>
+</article-meta></front>
+<body><p>Too short.</p></body>
+</article>"""
+        validator = JATSValidator(body_min_chars=800)
+        result = validator.validate(truly_incomplete_xml)
+
+        # No title, no abstract, body < 800 chars = INCOMPLETE
+        assert result.status == ValidationStatus.INCOMPLETE
+        assert result.has_title is False
+        assert result.has_abstract is False
+        assert result.has_body is False
 
     def test_validate_invalid_xml(self):
         """Invalid XML is marked invalid."""
@@ -586,10 +620,11 @@ consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
 </body>
 </article>"""
 
+    # Truly incomplete: no title, no abstract, short body (< 800 chars)
     INCOMPLETE_XML = """<?xml version="1.0"?>
 <article>
 <front><article-meta>
-<title-group><article-title>Incomplete Article</article-title></title-group>
+<title-group><article-title></article-title></title-group>
 </article-meta></front>
 <body><p>Short body.</p></body>
 </article>"""
@@ -610,7 +645,8 @@ consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
         assert entry.status == "valid"
 
     def test_save_incomplete_to_incomplete_folder(self, tmp_path: Path):
-        """Incomplete article is saved to incomplete/ subfolder."""
+        """Truly incomplete article is saved to incomplete/ subfolder."""
+        # Truly incomplete: no title, no abstract, short body
         path, result, entry = save_pmc_article(
             "PMC12345",
             self.INCOMPLETE_XML,
@@ -749,11 +785,12 @@ consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
 </body>
 </article>"""
 
+    # Truly incomplete: no title, no abstract, body < 800 chars
     INCOMPLETE_JATS = """<?xml version="1.0"?>
 <article>
 <front><article-meta>
 <article-id pub-id-type="pmcid">PMC67890</article-id>
-<title-group><article-title>Incomplete Article</article-title></title-group>
+<title-group><article-title></article-title></title-group>
 </article-meta></front>
 <body><p>Short body.</p></body>
 </article>"""
