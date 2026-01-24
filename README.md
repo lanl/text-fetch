@@ -425,6 +425,39 @@ Process local PDFs via GROBID and convert to JATS XML:
 text-fetch pdf ./Manuscripts --out ./output
 ```
 
+#### OCR Support for Scanned PDFs
+
+For scanned or image-based PDFs, you need the **full GROBID image** with Tesseract OCR:
+
+```bash
+# Start GROBID WITH OCR support (~5GB image)
+./scripts/start_grobid_with_ocr.sh
+
+# Process scanned PDFs
+text-fetch pdf batch --dir ./Manuscripts --out ./output --ocr
+```
+
+**Important:** The `--ocr` flag **requires** the full GROBID image (`grobid:X.X.X-full`). 
+If you use `--ocr` with the standard GROBID image (`grobid:X.X.X-crf`), you will get an error:
+
+```
+Error: OCR requested but GROBID does not have OCR support.
+The standard GROBID image (grobid:X.X.X-crf) does not include Tesseract.
+Use the full image: ./scripts/start_grobid_with_ocr.sh
+```
+
+**When to use OCR:**
+- Scanned papers (image-only PDFs)
+- Older publications without embedded text
+- Documents with mixed text/image content
+
+**When standard GROBID is sufficient:**
+- Modern PDFs with embedded text (most recent publications)
+- Born-digital documents
+
+The standard GROBID image is faster to start (~2GB vs ~5GB) and processes faster, 
+so only use OCR when necessary.
+
 ## JATS Validation
 
 Downloaded articles are automatically sorted by completeness:

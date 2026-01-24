@@ -1,6 +1,7 @@
 """Tests for GROBID client."""
 
-from text_fetch.grobid import GROBIDClient
+import pytest
+from text_fetch.grobid import GROBIDClient, GROBIDOCRError
 
 
 class TestGROBIDClient:
@@ -107,3 +108,132 @@ class TestGROBIDClient:
         client = GROBIDClient()
         result = client.tei_to_jats("<TEI/>", "/nonexistent/path.xsl")
         assert result is None
+
+
+class TestGROBIDOCRDetection:
+    """Tests for OCR capability detection."""
+
+    def test_has_ocr_support_with_tesseract(self, requests_mock):
+        """has_ocr_support returns True when Tesseract is detected."""
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="grobid.engine=tesseract\ngrobid.version=0.8.2",
+        )
+        client = GROBIDClient()
+        assert client.has_ocr_support() is True
+
+    def test_has_ocr_support_with_ocr_enabled(self, requests_mock):
+        """has_ocr_support returns True when 'ocr.enabled=true' in properties."""
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="some.property=value\nocr.enabled=true",
+        )
+        client = GROBIDClient()
+        assert client.has_ocr_support() is True
+
+    def test_has_ocr_support_with_pdfalto_ocr(self, requests_mock):
+        """has_ocr_support returns True when 'pdfalto.ocr=' in properties."""
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="grobid.pdfalto.ocr=tesseract\ngrobid.version=0.8.2",
+        )
+        client = GROBIDClient()
+        assert client.has_ocr_support() is True
+
+    def test_has_ocr_support_full_in_version(self, requests_mock):
+        """has_ocr_support returns True when 'full' in version."""
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2-full")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="no.ocr.here=true",
+        )
+        client = GROBIDClient()
+        assert client.has_ocr_support() is True
+
+    def test_has_ocr_support_standard_image(self, requests_mock):
+        """has_ocr_support returns False for standard GROBID image."""
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="grobid.version=0.8.2\nother.property=value",
+        )
+        client = GROBIDClient()
+        assert client.has_ocr_support() is False
+
+    def test_has_ocr_support_version_error(self, requests_mock):
+        """has_ocr_support returns False on version endpoint error."""
+        requests_mock.get("http://localhost:8070/api/version", status_code=500)
+        client = GROBIDClient()
+        assert client.has_ocr_support() is False
+
+    def test_has_ocr_support_connection_error(self, requests_mock):
+        """has_ocr_support returns False on connection error."""
+        import requests
+
+        requests_mock.get(
+            "http://localhost:8070/api/version",
+            exc=requests.exceptions.ConnectionError,
+        )
+        client = GROBIDClient()
+        assert client.has_ocr_support() is False
+
+    def test_has_ocr_support_properties_error(self, requests_mock):
+        """has_ocr_support handles properties endpoint error."""
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            status_code=404,
+        )
+        client = GROBIDClient()
+        # Should return False since no indicators found
+        assert client.has_ocr_support() is False
+
+    def test_process_pdf_ocr_requested_not_available(self, requests_mock):
+        """process_pdf raises GROBIDOCRError when OCR unavailable."""
+        # Mock no OCR support (standard GROBID image)
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="grobid.version=0.8.2\ngrobid.some.other.property=value",
+        )
+        client = GROBIDClient()
+
+        with pytest.raises(GROBIDOCRError) as exc_info:
+            client.process_pdf(b"fake pdf", ocr=True)
+
+        assert "OCR requested but GROBID does not have OCR support" in str(
+            exc_info.value
+        )
+        assert "start_grobid_with_ocr.sh" in str(exc_info.value)
+
+    def test_process_pdf_ocr_available(self, requests_mock):
+        """process_pdf works when OCR is requested and available."""
+        # Mock OCR support
+        requests_mock.get("http://localhost:8070/api/version", text="0.8.2-full")
+        requests_mock.get(
+            "http://localhost:8070/service/properties",
+            text="grobid.pdfalto.ocr=tesseract",
+        )
+        tei_response = '<?xml version="1.0"?><TEI>...</TEI>'
+        requests_mock.post(
+            "http://localhost:8070/api/processFulltextDocument",
+            text=tei_response,
+        )
+        client = GROBIDClient()
+        result = client.process_pdf(b"fake pdf", ocr=True)
+        assert result == tei_response
+
+    def test_process_pdf_no_ocr_no_check(self, requests_mock):
+        """process_pdf skips OCR check when ocr=False."""
+        # Only mock the process endpoint, not version/properties
+        tei_response = '<?xml version="1.0"?><TEI>...</TEI>'
+        requests_mock.post(
+            "http://localhost:8070/api/processFulltextDocument",
+            text=tei_response,
+        )
+        client = GROBIDClient()
+        result = client.process_pdf(b"fake pdf", ocr=False)
+        assert result == tei_response

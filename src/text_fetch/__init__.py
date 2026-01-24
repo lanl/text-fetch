@@ -37,7 +37,7 @@ from .fetch import (
     deduplicate_by_doi,
     unified_fetch,
 )
-from .grobid import GROBIDClient, get_default_xslt_path
+from .grobid import GROBIDClient, GROBIDOCRError, get_default_xslt_path
 from .pdf import (
     PDFProcessingResult,
     find_pdfs,
@@ -69,6 +69,7 @@ __all__ = [
     "EuropePMCArticle",
     "EuropePMCClient",
     "GROBIDClient",
+    "GROBIDOCRError",
     "MEDRXIV_CATEGORIES",
     "PDFProcessingResult",
     "SearchConfig",

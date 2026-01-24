@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ["GROBIDClient", "get_default_xslt_path"]
+__all__ = ["GROBIDClient", "GROBIDOCRError", "get_default_xslt_path"]
 
 import logging
 from importlib.resources import files
@@ -14,6 +14,12 @@ from lxml import etree
 from .common import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+
+class GROBIDOCRError(Exception):
+    """Raised when OCR is requested but GROBID does not have OCR support."""
+
+    pass
 
 
 def get_default_xslt_path() -> Path:
@@ -53,6 +59,52 @@ class GROBIDClient:
         except requests.RequestException:
             return False
 
+    def has_ocr_support(self) -> bool:
+        """Check if GROBID has OCR (Tesseract) support.
+
+        The -full GROBID image includes Tesseract for OCR.
+        The -crf image does not have OCR support.
+
+        This method queries the /api/version endpoint to detect the image type.
+
+        Returns:
+            True if GROBID has OCR support, False otherwise.
+        """
+        try:
+            resp = requests.get(f"{self.url}/api/version", timeout=5)
+            if resp.status_code != 200:
+                # Can't determine - assume no OCR to be safe
+                return False
+
+            # Check response for indicators of full image
+            # The version endpoint may contain info about Tesseract availability
+            version_info = resp.text.lower()
+
+            # Fallback: check if version contains "full" indicator
+            if "full" in version_info:
+                return True
+
+            # Try properties endpoint which lists available models
+            props_resp = requests.get(f"{self.url}/service/properties", timeout=5)
+            if props_resp.status_code == 200:
+                props = props_resp.text.lower()
+                # The full image typically has pdfalto with OCR support
+                # Check for specific OCR indicators (tesseract, or ocr= enabled)
+                if "tesseract" in props:
+                    return True
+                # Check for ocr=true or ocr.enabled=true patterns
+                # But avoid matching "no.ocr" or similar negations
+                if "ocr=true" in props or "ocr.enabled=true" in props:
+                    return True
+                # Check for pdfalto.ocr configuration (indicates OCR engine set)
+                if "pdfalto.ocr=" in props:
+                    return True
+
+            # Conservative default: assume no OCR
+            return False
+        except requests.RequestException:
+            return False
+
     def process_pdf(
         self,
         pdf_content: bytes,
@@ -70,7 +122,18 @@ class GROBIDClient:
 
         Returns:
             TEI XML string or None on failure.
+
+        Raises:
+            GROBIDOCRError: If OCR is requested but GROBID does not have OCR support.
         """
+        # Check OCR capability if OCR is requested
+        if ocr and not self.has_ocr_support():
+            raise GROBIDOCRError(
+                "OCR requested but GROBID does not have OCR support. "
+                "The standard GROBID image (grobid:X.X.X-crf) does not include Tesseract. "
+                "Use the full image: ./scripts/start_grobid_with_ocr.sh"
+            )
+
         self.limiter.wait()
         endpoint = "processFulltextDocument" if full_text else "processHeaderDocument"
         url = f"{self.url}/api/{endpoint}"
