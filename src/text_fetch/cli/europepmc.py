@@ -217,6 +217,13 @@ def europepmc_fetch(
         if verbose:
             click.echo(f"Using workspace: {ws_path}")
 
+    # ==========================================================================
+    # SEED PAPERS SECTION
+    # ==========================================================================
+    click.echo("=" * 50)
+    click.echo("SEED PAPERS")
+    click.echo("=" * 50)
+
     # Progress bar for seed fetch
     progress_bar = None
 
@@ -225,7 +232,7 @@ def europepmc_fetch(
         if progress_bar is None:
             progress_bar = click.progressbar(
                 length=total,
-                label="Fetching seed articles",
+                label="Downloading seeds",
                 show_pos=True,
                 show_percent=True,
             )
@@ -256,20 +263,43 @@ def europepmc_fetch(
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
 
-    # If expansion requested and we have seeds, expand
+    # Show seed papers summary with clear breakdown
+    articles_found = stats["articles_found"]
+    with_pmcid = stats["full_text_available"]
+    without_pmcid = articles_found - with_pmcid
+
+    click.echo(f"\nQuery matched: {articles_found} articles")
+    click.echo(f"  With PMCIDs (downloadable): {with_pmcid}")
+    if without_pmcid > 0:
+        click.echo(f"  Without PMCIDs (skipped):   {without_pmcid}")
+
+    click.echo(f"\nDownloaded: {stats['fetched']}")
+    click.echo(f"  Valid:      {stats['valid']}")
+    click.echo(f"  Incomplete: {stats['incomplete']}")
+    if stats.get("errors", 0) > 0:
+        click.echo(f"  Errors:     {stats['errors']}")
+    if stats.get("duplicates_skipped", 0) > 0:
+        click.echo(f"  Duplicates: {stats['duplicates_skipped']}")
+
+    # ==========================================================================
+    # CITATION EXPANSION SECTION
+    # ==========================================================================
     expansion_result = None
+    expanded_refs_downloaded = 0
+    expanded_cites_downloaded = 0
+    expanded_refs_discovered = 0
+    expanded_cites_discovered = 0
+
     if (do_expand_refs or do_expand_cites) and stats["full_text_available"] > 0:
         click.echo("\n" + "=" * 50)
-        click.echo("Citation Expansion")
+        click.echo("CITATION EXPANSION")
         click.echo("=" * 50)
 
         client = EuropePMCClient()
 
         # Get seed articles for expansion
-        # Any article with a PMCID can be expanded (we download from NCBI)
         if pmcid:
             # Direct PMCID lookup for seeds
-            click.echo(f"Using {len(pmcid)} provided PMCIDs as expansion seeds...")
             seeds = []
             for pmcid_val in pmcid:
                 article = client.get_by_pmcid(pmcid_val)
@@ -286,22 +316,23 @@ def europepmc_fetch(
                     date_from=date_from,
                     date_to=date_to,
                     open_access_only=not include_non_oa,
-                    has_full_text=False,  # Don't filter by Europe PMC's flag
+                    has_full_text=False,
                 )
 
             seeds = list(client.iter_search(seed_query, max_results=max_results))
-            # Filter for articles with PMCIDs (can be downloaded from NCBI)
             seeds = [s for s in seeds if s.pmcid]
 
         if not seeds:
             click.echo("No seed papers with PMCID available for expansion.")
         else:
-            click.echo(f"Expanding from {len(seeds)} seed papers...")
-            click.echo(
-                f"  Directions: "
-                f"{'references ' if do_expand_refs else ''}"
-                f"{'citations' if do_expand_cites else ''}"
-            )
+            directions = []
+            if do_expand_refs:
+                directions.append("references")
+            if do_expand_cites:
+                directions.append("citations")
+
+            click.echo(f"\nExpanding from {len(seeds)} seed papers...")
+            click.echo(f"  Directions: {' + '.join(directions)}")
             click.echo(f"  Depth: {expansion_depth}")
             if effective_max_expansion:
                 click.echo(f"  Max expansion: {effective_max_expansion:,}")
@@ -310,7 +341,6 @@ def europepmc_fetch(
             if dry_run:
                 click.echo("\nDry-run mode: gathering expansion statistics...")
 
-                # Expansion progress callback
                 def expansion_progress(stage: str, current: int, total: int) -> None:
                     if stage == "expanding":
                         click.echo(f"  Checking seed {current}/{total}...", nl=False)
@@ -326,17 +356,12 @@ def europepmc_fetch(
                     progress_callback=expansion_progress,
                 )
 
-                # Display dry-run report
                 _display_expansion_report(expansion_result)
 
-                # Prompt for confirmation
                 if not yes and not click.confirm("\nContinue with expansion?"):
                     click.echo("Expansion cancelled.")
                     expansion_result = None
-                # If confirmed, expansion_result already has the data
-
             else:
-                # Normal mode: expand directly
                 click.echo("\nExpanding...")
 
                 def expansion_progress(stage: str, current: int, total: int) -> None:
@@ -354,10 +379,11 @@ def europepmc_fetch(
                     max_expansion=effective_max_expansion,
                     progress_callback=expansion_progress,
                 )
-                click.echo()  # newline after progress
+                click.echo()
 
-            # Save expansion manifest if we have results
+            # Process expansion results
             if expansion_result and expansion_result.total_expanded > 0:
+                # Save expansion manifest
                 output_path = Path(out)
                 manifest_path = output_path / "expansion_manifest.json"
                 manifest_data = {
@@ -373,54 +399,103 @@ def europepmc_fetch(
                     "layers": expansion_result.layers,
                 }
                 manifest_path.write_text(json.dumps(manifest_data, indent=2))
-                click.echo(f"\nExpansion manifest saved: {manifest_path}")
 
-                # Look up expanded papers to find their PMCIDs
-                # Citation/reference API often doesn't include PMCID in results
-                click.echo("\nLooking up PMCIDs for expanded papers...")
-                expanded_pmcids: list[str] = []
-                papers_without_pmcid = 0
+                # Get discovered counts by type
+                expanded_refs_discovered = expansion_result.expansion_stats.get(
+                    "references_found", 0
+                )
+                expanded_cites_discovered = expansion_result.expansion_stats.get(
+                    "citations_found", 0
+                )
+                total_unique = expansion_result.expansion_stats.get("total_unique", 0)
+                duplicates = expansion_result.expansion_stats.get(
+                    "duplicates_skipped", 0
+                )
+
+                # Show discovered summary
+                click.echo("\nDiscovered in citation graph:")
+                if do_expand_refs:
+                    click.echo(
+                        f"  References (papers seeds cite):   {expanded_refs_discovered:,}"
+                    )
+                if do_expand_cites:
+                    click.echo(
+                        f"  Citations (papers citing seeds):  {expanded_cites_discovered:,}"
+                    )
+                if duplicates > 0:
+                    click.echo(f"  Duplicates removed:               {duplicates:,}")
+                click.echo(f"  Unique papers to look up:         {total_unique:,}")
+
+                # Look up PMCIDs with tracking by type
+                click.echo("\nLooking up PMCIDs...")
+                ref_pmcids: list[str] = []
+                cite_pmcids: list[str] = []
+                refs_no_pmcid = 0
+                cites_no_pmcid = 0
 
                 for papers in expansion_result.expanded_papers.values():
                     for paper in papers:
+                        exp_type = paper.get("_expansion_type", "")
+                        pmcid_found = None
+
                         # First check if PMCID already present
                         raw_pmcid = paper.get("pmcid")
                         if raw_pmcid:
                             pmcid_norm = str(raw_pmcid).upper()
                             if not pmcid_norm.startswith("PMC"):
                                 pmcid_norm = f"PMC{pmcid_norm}"
-                            expanded_pmcids.append(pmcid_norm)
-                            continue
-
-                        # Need to look up the paper to find PMCID
-                        source = paper.get("source", "")
-                        paper_id = paper.get("id")
-                        if source == "MED" and paper_id:
-                            # Look up by PMID
-                            article = client.get_by_pmid(str(paper_id))
-                            if article and article.pmcid:
-                                expanded_pmcids.append(article.pmcid)
-                            else:
-                                papers_without_pmcid += 1
-                        elif source == "PMC" and paper_id:
-                            # Already have PMCID-like ID
-                            pmcid_norm = str(paper_id).upper()
-                            if not pmcid_norm.startswith("PMC"):
-                                pmcid_norm = f"PMC{pmcid_norm}"
-                            expanded_pmcids.append(pmcid_norm)
+                            pmcid_found = pmcid_norm
                         else:
-                            papers_without_pmcid += 1
+                            # Need to look up the paper to find PMCID
+                            source = paper.get("source", "")
+                            paper_id = paper.get("id")
+                            if source == "MED" and paper_id:
+                                article = client.get_by_pmid(str(paper_id))
+                                if article and article.pmcid:
+                                    pmcid_found = article.pmcid
+                            elif source == "PMC" and paper_id:
+                                pmcid_norm = str(paper_id).upper()
+                                if not pmcid_norm.startswith("PMC"):
+                                    pmcid_norm = f"PMC{pmcid_norm}"
+                                pmcid_found = pmcid_norm
 
-                if papers_without_pmcid > 0:
+                        # Track by type
+                        if pmcid_found:
+                            if exp_type == "references":
+                                ref_pmcids.append(pmcid_found)
+                            elif exp_type == "citations":
+                                cite_pmcids.append(pmcid_found)
+                            else:
+                                ref_pmcids.append(pmcid_found)  # default
+                        else:
+                            if exp_type == "references":
+                                refs_no_pmcid += 1
+                            elif exp_type == "citations":
+                                cites_no_pmcid += 1
+                            else:
+                                refs_no_pmcid += 1
+
+                # Show PMCID lookup results
+                click.echo("\nPMCID lookup results:")
+                if do_expand_refs:
                     click.echo(
-                        f"  {papers_without_pmcid} papers don't have PMCIDs "
-                        "(no full-text available)"
+                        f"  References: {len(ref_pmcids):,} downloadable, "
+                        f"{refs_no_pmcid:,} without full-text"
+                    )
+                if do_expand_cites:
+                    click.echo(
+                        f"  Citations:  {len(cite_pmcids):,} downloadable, "
+                        f"{cites_no_pmcid:,} without full-text"
                     )
 
-                if expanded_pmcids:
-                    click.echo(f"\nFetching {len(expanded_pmcids)} expanded papers...")
+                # Combine and download
+                all_expanded_pmcids = ref_pmcids + cite_pmcids
 
-                    # Progress bar for expanded fetch
+                if all_expanded_pmcids:
+                    click.echo(
+                        f"\nFetching {len(all_expanded_pmcids):,} expanded papers..."
+                    )
+
                     exp_progress_bar = None
 
                     def exp_progress_cb(
@@ -430,7 +505,7 @@ def europepmc_fetch(
                         if exp_progress_bar is None:
                             exp_progress_bar = click.progressbar(
                                 length=total,
-                                label="Fetching expanded articles",
+                                label="Downloading expanded",
                                 show_pos=True,
                                 show_percent=True,
                             )
@@ -439,7 +514,7 @@ def europepmc_fetch(
 
                     try:
                         exp_stats = fetch_europepmc(
-                            pmcids=expanded_pmcids,
+                            pmcids=all_expanded_pmcids,
                             output_dir=out,
                             workspace=ws,
                             open_access_only=not include_non_oa,
@@ -452,7 +527,6 @@ def europepmc_fetch(
                         if exp_progress_bar is not None:
                             exp_progress_bar.__exit__(None, None, None)
 
-                    # Update main stats with expansion stats
                     stats["expanded_fetched"] = exp_stats["fetched"]
                     stats["expanded_valid"] = exp_stats["valid"]
                     stats["expanded_errors"] = exp_stats["errors"]
@@ -460,21 +534,22 @@ def europepmc_fetch(
                         "duplicates_skipped", 0
                     )
 
-                    click.echo("\nExpanded papers downloaded:")
-                    click.echo(f"  Fetched: {exp_stats['fetched']:,}")
-                    click.echo(f"  Valid: {exp_stats['valid']:,}")
-                    click.echo(f"  Errors: {exp_stats['errors']:,}")
-                    if exp_stats.get("duplicates_skipped"):
-                        click.echo(
-                            f"  Duplicates skipped: "
-                            f"{exp_stats['duplicates_skipped']:,}"
-                        )
+                    # Track counts for summary
+                    expanded_refs_downloaded = len(ref_pmcids)
+                    expanded_cites_downloaded = len(cite_pmcids)
 
-    # Record search in workspace
+                    click.echo(f"\nDownloaded: {exp_stats['fetched']:,}")
+                    click.echo(f"  Valid:      {exp_stats['valid']:,}")
+                    if exp_stats.get("errors", 0) > 0:
+                        click.echo(f"  Errors:     {exp_stats['errors']:,}")
+                    if exp_stats.get("duplicates_skipped"):
+                        click.echo(f"  Duplicates: {exp_stats['duplicates_skipped']:,}")
+
+    # ==========================================================================
+    # RECORD SEARCH IN WORKSPACE
+    # ==========================================================================
     if ws:
-        # Build command string
         cmd = " ".join(sys.argv)
-        # Build config dict for recording
         search_config = {
             "source": "europepmc",
             "query": query,
@@ -496,43 +571,42 @@ def europepmc_fetch(
             stats=stats,
         )
 
-    # Summary
+    # ==========================================================================
+    # FINAL SUMMARY
+    # ==========================================================================
     click.echo("\n" + "=" * 50)
-    click.echo("Fetch complete!")
-    click.echo(f"  Articles found: {stats['articles_found']:,}")
-    click.echo(f"  Full-text available: {stats['full_text_available']:,}")
-    click.echo(f"  Downloaded: {stats['fetched']:,}")
-    click.echo(f"    Valid: {stats['valid']:,}")
-    click.echo(f"    Incomplete: {stats['incomplete']:,}")
-    if stats.get("resumed_from"):
-        click.echo(f"  Resumed from: {stats['resumed_from']:,} completed")
-    if stats.get("duplicates_skipped"):
-        click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
-    click.echo(f"  Errors: {stats['errors']:,}")
+    click.echo("CORPUS SUMMARY")
+    click.echo("=" * 50)
 
-    # Expansion summary
-    if expansion_result:
-        click.echo("\nExpansion:")
-        click.echo(f"  Total expanded: {expansion_result.total_expanded:,}")
-        click.echo(
-            f"  References found: "
-            f"{expansion_result.expansion_stats.get('references_found', 0):,}"
-        )
-        click.echo(
-            f"  Citations found: "
-            f"{expansion_result.expansion_stats.get('citations_found', 0):,}"
-        )
-        click.echo(
-            f"  Duplicates skipped: "
-            f"{expansion_result.expansion_stats.get('duplicates_skipped', 0):,}"
-        )
+    seed_valid = stats["valid"]
+    total_corpus = seed_valid
+
+    click.echo(f"\nSeeds:      {seed_valid:,} papers")
+
+    if expansion_result and expansion_result.total_expanded > 0:
+        exp_valid = stats.get("expanded_valid", 0)
+        total_corpus += exp_valid
+
+        if do_expand_refs and expanded_refs_discovered > 0:
+            click.echo(
+                f"References: {expanded_refs_downloaded:,} papers "
+                f"(from {expanded_refs_discovered:,} discovered)"
+            )
+        if do_expand_cites and expanded_cites_discovered > 0:
+            click.echo(
+                f"Citations:  {expanded_cites_downloaded:,} papers "
+                f"(from {expanded_cites_discovered:,} discovered)"
+            )
+
+    click.echo("-" * 30)
+    click.echo(f"TOTAL:      {total_corpus:,} papers")
 
     if ws:
         click.echo(f"\nWorkspace: {ws.path}")
     else:
-        click.echo(f"\nOutput: {out}/")
+        click.echo(f"\nOutput: {out}/valid/")
 
-    # Create tarball if requested (only if not using workspace)
+    # Create tarball if requested
     if not ws:
         auth = author or ""
         cmd = f"text-fetch europepmc fetch --author '{auth}' --out {out}"
