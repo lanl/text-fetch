@@ -6,6 +6,8 @@ from pathlib import Path
 from text_fetch.europepmc import (
     EuropePMCArticle,
     EuropePMCClient,
+    ExpansionResult,
+    expand_papers,
     fetch_europepmc,
 )
 
@@ -838,6 +840,311 @@ class TestEuropePMCClient:
         references = client.get_all_references("MED", "12345678", max_results=5)
 
         assert len(references) == 5
+
+
+class TestExpandPapers:
+    """Tests for expand_papers function."""
+
+    def _make_article(
+        self,
+        pmcid: str | None = None,
+        pmid: str | None = None,
+        doi: str | None = None,
+        source: str = "MED",
+    ) -> EuropePMCArticle:
+        """Helper to create test articles."""
+        return EuropePMCArticle(
+            id=pmid or "12345",
+            source=source,
+            pmid=pmid,
+            pmcid=pmcid,
+            doi=doi,
+            title="Test Article",
+            authors=[],
+            abstract="",
+            journal="",
+            pub_year=2024,
+            first_publication_date=None,
+            is_open_access=True,
+            has_full_text=True,
+        )
+
+    def test_expand_no_directions(self, requests_mock) -> None:
+        """expand_papers with no directions returns empty result."""
+        client = EuropePMCClient()
+        seeds = [self._make_article(pmcid="PMC123456")]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=False,
+            expand_citations=False,
+        )
+
+        assert result.total_expanded == 0
+        assert result.seed_coverage["total_seeds"] == 1
+
+    def test_expand_references_only(self, requests_mock) -> None:
+        """expand_papers follows only references."""
+        # Mock reference lookup for seed
+        refs_response = {
+            "hitCount": 2,
+            "referenceList": {
+                "reference": [
+                    {"id": "111", "source": "MED", "pmid": "111", "title": "Ref 1"},
+                    {"id": "222", "source": "MED", "pmid": "222", "title": "Ref 2"},
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            json=refs_response,
+        )
+
+        client = EuropePMCClient()
+        seeds = [self._make_article(pmcid="PMC123456", source="PMC")]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=True,
+            expand_citations=False,
+            depth=1,
+        )
+
+        assert result.total_expanded == 2
+        assert result.expansion_stats["references_found"] == 2
+        assert result.expansion_stats["citations_found"] == 0
+        assert result.seed_coverage["seeds_with_references"] == 1
+
+    def test_expand_citations_only(self, requests_mock) -> None:
+        """expand_papers follows only citations."""
+        # Mock citation lookup for seed
+        cites_response = {
+            "hitCount": 2,
+            "citationList": {
+                "citation": [
+                    {"id": "333", "source": "MED", "pmid": "333", "title": "Cite 1"},
+                    {"id": "444", "source": "MED", "pmid": "444", "title": "Cite 2"},
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1/json",
+            json=cites_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1000/json",
+            json=cites_response,
+        )
+
+        client = EuropePMCClient()
+        seeds = [self._make_article(pmcid="PMC123456", source="PMC")]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=False,
+            expand_citations=True,
+            depth=1,
+        )
+
+        assert result.total_expanded == 2
+        assert result.expansion_stats["citations_found"] == 2
+        assert result.expansion_stats["references_found"] == 0
+        assert result.seed_coverage["seeds_with_citations"] == 1
+
+    def test_expand_both_directions(self, requests_mock) -> None:
+        """expand_papers follows both references and citations."""
+        # Mock reference and citation lookups
+        refs_response = {
+            "hitCount": 1,
+            "referenceList": {
+                "reference": [
+                    {"id": "111", "source": "MED", "pmid": "111", "title": "Ref 1"},
+                ]
+            },
+        }
+        cites_response = {
+            "hitCount": 1,
+            "citationList": {
+                "citation": [
+                    {"id": "222", "source": "MED", "pmid": "222", "title": "Cite 1"},
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1/json",
+            json=cites_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1000/json",
+            json=cites_response,
+        )
+
+        client = EuropePMCClient()
+        seeds = [self._make_article(pmcid="PMC123456", source="PMC")]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=True,
+            expand_citations=True,
+            depth=1,
+        )
+
+        assert result.total_expanded == 2
+        assert result.expansion_stats["references_found"] == 1
+        assert result.expansion_stats["citations_found"] == 1
+
+    def test_expand_respects_max_expansion(self, requests_mock) -> None:
+        """expand_papers respects max_expansion limit."""
+        # Mock lots of references
+        refs_response = {
+            "hitCount": 100,
+            "referenceList": {
+                "reference": [
+                    {"id": str(i), "source": "MED", "pmid": str(i), "title": f"Ref {i}"}
+                    for i in range(100)
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            json=refs_response,
+        )
+
+        client = EuropePMCClient()
+        seeds = [self._make_article(pmcid="PMC123456", source="PMC")]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=True,
+            depth=1,
+            max_expansion=10,
+        )
+
+        assert result.total_expanded <= 10
+
+    def test_expand_deduplicates(self, requests_mock) -> None:
+        """expand_papers deduplicates papers found from multiple seeds."""
+        # Same reference found from two seeds
+        refs_response = {
+            "hitCount": 1,
+            "referenceList": {
+                "reference": [
+                    {
+                        "id": "999",
+                        "source": "MED",
+                        "pmid": "999",
+                        "doi": "10.1234/same",
+                        "title": "Same Paper",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111/references/1/1/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111/references/1/1000/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/222/references/1/1/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/222/references/1/1000/json",
+            json=refs_response,
+        )
+
+        client = EuropePMCClient()
+        seeds = [
+            self._make_article(pmcid="PMC111", source="PMC"),
+            self._make_article(pmcid="PMC222", source="PMC"),
+        ]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=True,
+            depth=1,
+        )
+
+        # Should only have 1 unique paper despite being found twice
+        assert result.total_expanded == 1
+        assert result.expansion_stats["duplicates_skipped"] == 1
+
+    def test_expansion_result_properties(self) -> None:
+        """ExpansionResult properties work correctly."""
+        result = ExpansionResult(
+            expanded_papers={
+                1: [{"title": "P1"}, {"title": "P2"}],
+                2: [{"title": "P3"}],
+            },
+            config={"depth": 2},
+            seed_coverage={"total_seeds": 5},
+            expansion_stats={"total_unique": 3},
+            id_issues={"no_id": []},
+            layers=[],
+        )
+
+        assert result.total_expanded == 3
+        assert len(result.all_papers) == 3
+
+    def test_expand_tracks_layers(self, requests_mock) -> None:
+        """expand_papers tracks papers by depth layer."""
+        refs_response = {
+            "hitCount": 1,
+            "referenceList": {
+                "reference": [
+                    {"id": "111", "source": "MED", "pmid": "111", "title": "Ref 1"},
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            json=refs_response,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            json=refs_response,
+        )
+
+        client = EuropePMCClient()
+        seeds = [self._make_article(pmcid="PMC123456", source="PMC")]
+
+        result = expand_papers(
+            client=client,
+            seeds=seeds,
+            expand_references=True,
+            depth=1,
+        )
+
+        # Should have seed layer and reference layer
+        assert len(result.layers) >= 1
+        seed_layer = next(lyr for lyr in result.layers if lyr["type"] == "seed")
+        assert seed_layer["depth"] == 0
+        assert seed_layer["count"] == 1
 
 
 class TestFetchEuropepmc:
