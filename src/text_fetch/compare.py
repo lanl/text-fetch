@@ -39,7 +39,7 @@ class ComparisonResult:
         overlap: Set of IDs present in both corpora
         reference_only: Set of IDs only in reference
         candidate_only: Set of IDs only in candidate
-        normalized: Whether NCBI ID normalization was applied
+        normalized: Whether Europe PMC ID normalization was applied
     """
 
     reference_label: str
@@ -459,9 +459,11 @@ def normalize_ids_via_europepmc(
         + len([p for p in pmids if p not in unresolved_set and p not in no_pmcid_set])
     )
     logger.info(
-        "ID normalization: %d/%d resolved to PMCID",
+        "ID normalization: %d/%d IDs are PMCIDs (%d already, %d resolved)",
         resolved_to_pmcid,
         len(ids),
+        len(pmcids),
+        resolved_to_pmcid - len(pmcids),
     )
     if issues["unresolved"]:
         logger.warning(
