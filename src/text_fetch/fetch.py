@@ -354,8 +354,8 @@ def _handle_europepmc_expansion(
         seeds.append(article)
         # Update progress every 25 articles (Europe PMC page size)
         if progress_callback and (i % 25 == 0 or i == 0):
-            # Estimate expected - use max_results if set, otherwise show growing count
-            total_est = max_results if max_results else (i + 1) * 2
+            # When max_results is set, use it; otherwise use current + buffer
+            total_est = max_results if max_results else max(i + 100, 100)
             progress_callback("europepmc", f"search:{i}", i + 1, total_est)
 
     # Filter to papers with PMCIDs (downloadable)

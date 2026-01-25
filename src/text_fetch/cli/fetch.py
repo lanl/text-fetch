@@ -284,18 +284,36 @@ def unified_fetch_cmd(
     current_source: list[str | None] = [None]
     progress_bar: list[click.progressbar | None] = [None]
 
+    # Track current phase for label changes
+    current_phase: list[str] = [""]
+
     def progress_callback(
         source: str, article_id: str, current: int, total: int
     ) -> None:
-        if source != current_source[0]:
+        # Determine current phase from article_id prefix
+        if article_id.startswith("search:"):
+            phase = "search"
+        elif article_id.startswith("expand:"):
+            phase = "expand"
+        else:
+            phase = "fetch"
+
+        # Create new progress bar if source or phase changed
+        phase_key = f"{source}:{phase}"
+        if phase_key != current_phase[0]:
             if progress_bar[0] is not None:
                 progress_bar[0].__exit__(None, None, None)
+            current_phase[0] = phase_key
             current_source[0] = source
-            # Handle expansion progress labels
-            if article_id.startswith("expand:"):
+
+            # Set appropriate label
+            if phase == "search":
+                label = f"Searching {source}"
+            elif phase == "expand":
                 label = f"Expanding {source}"
             else:
                 label = f"Fetching {source}"
+
             progress_bar[0] = click.progressbar(
                 length=total,
                 label=label,
@@ -303,7 +321,11 @@ def unified_fetch_cmd(
                 show_percent=True,
             )
             progress_bar[0].__enter__()
+
         if progress_bar[0] is not None:
+            # Update length if total changed (for unbounded searches)
+            if hasattr(progress_bar[0], "length") and progress_bar[0].length < total:
+                progress_bar[0].length = total
             progress_bar[0].update(1)
 
     try:
