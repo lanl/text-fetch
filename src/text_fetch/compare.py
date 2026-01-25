@@ -449,17 +449,18 @@ def normalize_ids_via_europepmc(
             issues["unresolved"].append(pmid)
             normalized.add(pmid)
 
-    # Log summary
-    total_dois = len(dois)
-    total_pmids = len(pmids)
-    resolved_count = (
+    # Log summary - count only IDs that actually resolved to a PMCID
+    # (exclude both unresolved and no_pmcid cases)
+    unresolved_set = set(issues["unresolved"])
+    no_pmcid_set = set(issues["no_pmcid"])
+    resolved_to_pmcid = (
         len(pmcids)
-        + (total_dois - len([d for d in dois if d in issues["unresolved"]]))
-        + (total_pmids - len([p for p in pmids if p in issues["unresolved"]]))
+        + len([d for d in dois if d not in unresolved_set and d not in no_pmcid_set])
+        + len([p for p in pmids if p not in unresolved_set and p not in no_pmcid_set])
     )
     logger.info(
         "ID normalization: %d/%d resolved to PMCID",
-        resolved_count,
+        resolved_to_pmcid,
         len(ids),
     )
     if issues["unresolved"]:
