@@ -229,10 +229,57 @@ def parse_id_list(path: Path) -> tuple[set[str], dict[str, int]]:
     return ids, type_counts
 
 
+def _extract_id_from_entry(
+    entry: dict, type_counts: dict[str, int]
+) -> tuple[str | None, bool]:
+    """Extract and normalize ID from a manifest entry.
+
+    Priority: PMCID > DOI > path/filename
+
+    Args:
+        entry: Manifest entry dict
+        type_counts: Dict to update with ID type counts
+
+    Returns:
+        Tuple of (normalized ID or None, whether extraction succeeded)
+    """
+    # Priority: PMCID > DOI > filename
+    if entry.get("pmcid"):
+        pmcid = normalize_id(entry["pmcid"])
+        type_counts["pmcid"] += 1
+        return pmcid, True
+
+    if entry.get("doi"):
+        doi = normalize_id(entry["doi"])
+        type_counts["doi"] += 1
+        return doi, True
+
+    # Try to extract from path/filename
+    path_key = entry.get("path") or entry.get("filename")
+    if path_key:
+        filename = Path(path_key).stem
+        id_type = detect_id_type(filename)
+        if id_type != "unknown":
+            type_counts[id_type] += 1
+            return normalize_id(filename), True
+        else:
+            type_counts["unknown"] += 1
+            logger.warning("Unknown ID from path: %s", path_key)
+            return None, False
+
+    return None, False
+
+
 def extract_ids_from_tarball(path: Path) -> tuple[set[str], dict[str, int]]:
     """Extract paper IDs from a text-fetch tarball.
 
     Reads manifest.json from the tarball and extracts IDs.
+    Supports multiple manifest schemas:
+    - "files" list (comparison-format manifest)
+    - "articles" list (PMC fetch manifest)
+    - "per_source" dict (unified fetch manifest)
+    - Fallback to XML filename scanning if no manifest found
+
     Priority: PMCID > DOI > filename parsing
 
     Args:
@@ -256,29 +303,51 @@ def extract_ids_from_tarball(path: Path) -> tuple[set[str], dict[str, int]]:
             f = tar.extractfile(manifest_member)
             if f:
                 manifest = json.load(f)
-                for entry in manifest.get("files", []):
-                    # Priority: PMCID > DOI > filename
-                    if entry.get("pmcid"):
-                        pmcid = normalize_id(entry["pmcid"])
-                        ids.add(pmcid)
-                        type_counts["pmcid"] += 1
-                    elif entry.get("doi"):
-                        doi = normalize_id(entry["doi"])
-                        ids.add(doi)
-                        type_counts["doi"] += 1
-                    elif entry.get("path"):
-                        # Try to extract ID from filename
-                        filename = Path(entry["path"]).stem
-                        id_type = detect_id_type(filename)
-                        if id_type != "unknown":
-                            ids.add(normalize_id(filename))
-                            type_counts[id_type] += 1
-                        else:
-                            type_counts["unknown"] += 1
-                            logger.warning("Unknown ID from path: %s", entry["path"])
-        else:
-            # No manifest.json - fall back to listing XML files
-            logger.warning("No manifest.json in %s, using XML filenames", path)
+
+                # Try different manifest schemas
+                entries_found = False
+
+                # Schema 1: "files" list (comparison-format)
+                if "files" in manifest and manifest["files"]:
+                    entries_found = True
+                    for entry in manifest["files"]:
+                        id_val, _ = _extract_id_from_entry(entry, type_counts)
+                        if id_val:
+                            ids.add(id_val)
+
+                # Schema 2: "articles" list (PMC fetch manifest)
+                if "articles" in manifest and manifest["articles"]:
+                    entries_found = True
+                    for entry in manifest["articles"]:
+                        id_val, _ = _extract_id_from_entry(entry, type_counts)
+                        if id_val:
+                            ids.add(id_val)
+
+                # Schema 3: "per_source" dict (unified fetch manifest)
+                if "per_source" in manifest and manifest["per_source"]:
+                    entries_found = True
+                    for _source_name, source_data in manifest["per_source"].items():
+                        # Each source may have "articles" or "files"
+                        source_entries = source_data.get(
+                            "articles", source_data.get("files", [])
+                        )
+                        for entry in source_entries:
+                            id_val, _ = _extract_id_from_entry(entry, type_counts)
+                            if id_val:
+                                ids.add(id_val)
+
+                if not entries_found:
+                    logger.warning(
+                        "Manifest in %s has no recognized article list "
+                        "(tried: files, articles, per_source)",
+                        path,
+                    )
+
+        # Fallback to XML filename scanning if no manifest or no entries
+        if not ids:
+            logger.warning(
+                "No IDs extracted from manifest in %s, using XML filenames", path
+            )
             for member in tar.getmembers():
                 if member.name.endswith(".xml"):
                     filename = Path(member.name).stem

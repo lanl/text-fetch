@@ -283,6 +283,49 @@ class TestExtractIdsFromTarball:
         assert ids == {"PMC123456", "PMC789012"}
         assert types["pmcid"] == 2
 
+    def test_tarball_articles_schema(self, tmp_path: Path) -> None:
+        """Test extracting IDs from 'articles' schema (PMC fetch)."""
+        manifest = {
+            "articles": [
+                {"pmcid": "PMC123456", "doi": "10.1234/a"},
+                {"pmcid": "PMC789012", "doi": "10.1234/b"},
+            ]
+        }
+        tarball_path = self._create_tarball(tmp_path, manifest=manifest)
+
+        ids, types = extract_ids_from_tarball(tarball_path)
+
+        assert ids == {"PMC123456", "PMC789012"}
+        assert types["pmcid"] == 2
+
+    def test_tarball_per_source_schema(self, tmp_path: Path) -> None:
+        """Test extracting IDs from 'per_source' schema (unified fetch)."""
+        manifest = {
+            "per_source": {
+                "europepmc": {
+                    "articles": [
+                        {"pmcid": "PMC111111"},
+                        {"doi": "10.1234/example"},
+                    ]
+                },
+                "pmc": {
+                    "articles": [
+                        {"pmcid": "PMC222222"},
+                    ]
+                },
+            }
+        }
+        tarball_path = self._create_tarball(tmp_path, manifest=manifest)
+
+        ids, types = extract_ids_from_tarball(tarball_path)
+
+        assert len(ids) == 3
+        assert "PMC111111" in ids
+        assert "PMC222222" in ids
+        assert "10.1234/example" in ids
+        assert types["pmcid"] == 2
+        assert types["doi"] == 1
+
 
 class TestLoadCorpusIds:
     """Tests for load_corpus_ids function."""
