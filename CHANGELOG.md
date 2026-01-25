@@ -16,6 +16,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Handles duplicates and empty lists gracefully
   - Added 7 unit tests for batch lookup
 
+## [0.3.2] - 2026-01-25
+
+### Added
+- **Expansion Plan Persistence** - Save expansion results for later resumption
+  - `ExpansionPlan` dataclass for storing expansion analysis results
+  - Dry-run automatically saves `.expansion_plan.json` to output directory
+  - Plan includes seed PMCIDs, expanded PMCIDs, expansion config, and stats
+  - `from_json()` and `to_json()` methods for serialization
+  - `save()` method for persisting to output directory
+  - `total_papers` property for deduplicated count
+
+- **Resume from Saved Plan** - Skip 45-minute expansion analysis
+  - `--from-plan` CLI option to load saved expansion plan
+  - Direct fetch without re-running expansion analysis
+  - `--max-expansion` can override original plan limit
+  - Displays plan summary before proceeding
+  - `expansion_plan` parameter added to `unified_fetch()`
+  - `_fetch_from_expansion_plan()` function for plan-based fetching
+
+- **Enhanced Dry-Run Report** - Shows plan save location
+  - Dry-run report now includes plan file path
+  - Shows resume command example for convenience
+  - Plan saved to `{output_dir}/.expansion_plan.json`
+
+### Target Workflow
+```bash
+# Step 1: Run dry-run (saves plan automatically)
+text-fetch fetch --config-file ebola.json --sources europepmc \
+    --expand --dry-run --out ./output
+
+# [Shows dry-run report, user types 'N']
+# Plan saved to: ./output/.expansion_plan.json
+
+# Step 2: Resume from saved plan with adjusted settings
+text-fetch fetch --from-plan ./output/.expansion_plan.json \
+    --max-expansion 5000 --out ./final_output
+```
+
+### Tests
+- Added 9 new tests for `ExpansionPlan` dataclass
+- Added 2 tests for `unified_fetch()` with `expansion_plan` parameter
+- Total test count: 48 in test_fetch.py (all passing)
+
 ## [0.3.1] - 2026-01-25
 
 ### Added

@@ -88,6 +88,11 @@ from ._common import handle_tarball_creation
     is_flag=True,
     help="Auto-confirm dry-run prompt",
 )
+@click.option(
+    "--from-plan",
+    type=click.Path(exists=True),
+    help="Resume from saved expansion plan (skip expansion analysis)",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -113,6 +118,7 @@ def unified_fetch_cmd(
     max_expansion: int,
     dry_run: bool,
     yes: bool,
+    from_plan: str | None,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -166,9 +172,29 @@ def unified_fetch_cmd(
     from ..query import SearchConfig, SearchConfigError
     from ..workspace import Workspace
 
-    # Validate options
+    # Handle --from-plan mode (different validation)
+    if from_plan:
+        # Load plan and run fetch directly
+        _handle_from_plan(
+            from_plan=from_plan,
+            out=out,
+            workspace=workspace,
+            email=email,
+            api_key=api_key,
+            max_expansion=max_expansion,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            verbose=verbose,
+            yes=yes,
+            ctx=ctx,
+        )
+        return
+
+    # Validate options for normal mode
     if not config_file and not from_tarball:
-        raise click.UsageError("Either --config-file or --from-tarball is required")
+        raise click.UsageError(
+            "Either --config-file, --from-tarball, or --from-plan is required"
+        )
     if config_file and from_tarball:
         raise click.UsageError("Cannot use both --config-file and --from-tarball")
     if update and not workspace:
@@ -540,4 +566,176 @@ def _display_dry_run_report(
             else:
                 click.echo(f"  Depth {depth} ({ltype}): {count:,}")
 
+    # Show plan save info
+    plan_path = expansion.get("plan_saved")
+    if plan_path:
+        click.echo("\nEXPANSION PLAN SAVED")
+        click.echo(f"  Location: {plan_path}")
+        click.echo("  To resume later without re-running expansion:")
+        click.echo(f"    text-fetch fetch --from-plan {plan_path} --out <dir>")
+
     click.echo("\n" + "=" * 60)
+
+
+def _handle_from_plan(
+    from_plan: str,
+    out: str,
+    workspace: str | None,
+    email: str | None,
+    api_key: str | None,
+    max_expansion: int,
+    tarball: bool,
+    tarball_name: str | None,
+    verbose: bool,
+    yes: bool,
+    ctx: click.Context,
+) -> None:
+    """Handle fetch from saved expansion plan."""
+    import contextlib
+    import logging
+
+    from ..config import get_ncbi_api_key, get_ncbi_email
+    from ..fetch import ExpansionPlan, unified_fetch
+    from ..workspace import Workspace
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+
+    app_config = ctx.obj["config"]
+
+    # Load expansion plan
+    plan_path = Path(from_plan)
+    plan = ExpansionPlan.from_json(plan_path)
+
+    # Display plan summary
+    click.echo("=" * 60)
+    click.echo("LOADING EXPANSION PLAN")
+    click.echo("=" * 60)
+    click.echo(f"\nPlan file: {from_plan}")
+    click.echo(f"Created: {plan.created_at}")
+    click.echo(f"text-fetch version: {plan.text_fetch_version}")
+    click.echo(f"Config file: {plan.config_file}")
+    click.echo(f"Query: {plan.query}")
+    click.echo()
+    click.echo(f"Seed papers: {len(plan.seed_pmcids):,}")
+    click.echo(f"Expanded papers: {len(plan.expanded_pmcids):,}")
+    click.echo(f"Total unique: {plan.total_papers:,}")
+
+    # Show expansion config
+    exp_cfg = plan.expansion_config
+    click.echo("\nOriginal expansion config:")
+    if exp_cfg.get("expand_references"):
+        click.echo("  References: YES")
+    if exp_cfg.get("expand_citations"):
+        click.echo("  Citations: YES")
+    click.echo(f"  Depth: {exp_cfg.get('depth', 1)}")
+    orig_max = exp_cfg.get("max_expansion")
+    click.echo(f"  Max expansion: {orig_max if orig_max else 'unlimited'}")
+
+    # Show override if specified
+    effective_max = max_expansion if max_expansion > 0 else None
+    if effective_max and effective_max < len(plan.expanded_pmcids):
+        click.echo()
+        click.echo(
+            f"Note: --max-expansion {effective_max} will limit "
+            f"expanded papers from {len(plan.expanded_pmcids):,} "
+            f"to {effective_max:,}"
+        )
+
+    click.echo()
+    click.echo(f"Output directory: {out}")
+
+    # Confirm unless --yes
+    if not yes and not click.confirm("Proceed with fetch?"):
+        click.echo("Cancelled.")
+        return
+
+    # Resolve settings
+    resolved_email = None
+    with contextlib.suppress(ValueError):
+        resolved_email = get_ncbi_email(cli_value=email, config=app_config)
+
+    resolved_api_key = get_ncbi_api_key(cli_value=api_key, config=app_config)
+
+    # Load or create workspace if specified
+    ws = None
+    if workspace:
+        ws_path = Path(workspace)
+        ws = Workspace.load_or_init(ws_path)
+        if verbose:
+            click.echo(f"Using workspace: {ws_path}")
+
+    # Progress tracking
+    progress_bar: list[click.progressbar | None] = [None]
+    current_phase: list[str] = [""]
+
+    def progress_callback(
+        source: str, article_id: str, current: int, total: int
+    ) -> None:
+        phase = "fetch"
+        phase_key = f"{source}:{phase}"
+
+        if phase_key != current_phase[0]:
+            if progress_bar[0] is not None:
+                progress_bar[0].__exit__(None, None, None)
+            current_phase[0] = phase_key
+
+            progress_bar[0] = click.progressbar(
+                length=total,
+                label=f"Fetching {source} (ETA shown)",
+                show_pos=True,
+                show_percent=True,
+            )
+            progress_bar[0].__enter__()
+
+        if progress_bar[0] is not None:
+            if hasattr(progress_bar[0], "length") and progress_bar[0].length < total:
+                progress_bar[0].length = total
+            progress_bar[0].update(1)
+
+    click.echo()
+    try:
+        stats = unified_fetch(
+            output_dir=out,
+            workspace=ws,
+            email=resolved_email,
+            api_key=resolved_api_key,
+            verbose=verbose,
+            progress_callback=progress_callback,
+            max_expansion=effective_max,
+            expansion_plan=plan,
+        )
+    finally:
+        if progress_bar[0] is not None:
+            progress_bar[0].__exit__(None, None, None)
+
+    # Summary
+    click.echo("\n" + "=" * 60)
+    click.echo("Fetch from plan complete!")
+    click.echo()
+    click.echo(f"Total fetched: {stats['total_fetched']:,}")
+    click.echo(f"Total valid: {stats['total_valid']:,}")
+    click.echo(f"Total incomplete: {stats.get('total_incomplete', 0):,}")
+    click.echo(f"Total errors: {stats.get('total_errors', 0):,}")
+    if ws:
+        click.echo(f"Duplicates skipped: {stats.get('duplicates_skipped', 0):,}")
+        click.echo(f"\nWorkspace: {ws.path}")
+    else:
+        click.echo(f"\nOutput: {out}/")
+
+    # Create tarball if requested (only if not using workspace)
+    if not ws and tarball:
+        handle_tarball_creation(
+            output_dir=out,
+            tarball=tarball,
+            tarball_name=tarball_name,
+            stats=stats,
+            search_config_dict={"from_plan": from_plan},
+            command=f"text-fetch fetch --from-plan {from_plan} --out {out}",
+            source="europepmc",
+            verbose=verbose,
+        )
+    elif ws and tarball:
+        click.echo(
+            "Note: Use 'text-fetch workspace build' to create tarball " "from workspace"
+        )
