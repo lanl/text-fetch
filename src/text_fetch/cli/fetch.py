@@ -286,6 +286,7 @@ def unified_fetch_cmd(
 
     # Track current phase for label changes
     current_phase: list[str] = [""]
+    last_search_count: list[int] = [0]
 
     def progress_callback(
         source: str, article_id: str, current: int, total: int
@@ -298,21 +299,35 @@ def unified_fetch_cmd(
         else:
             phase = "fetch"
 
+        # For search phase, use simple text output (no progress bar)
+        # because we don't know the total until done
+        if phase == "search":
+            # Only update if count changed significantly
+            if current > last_search_count[0]:
+                last_search_count[0] = current
+                # Overwrite the same line with \r
+                click.echo(
+                    f"\rSearching {source}... {current:,} articles found (of ~{total:,})",
+                    nl=False,
+                )
+            return
+
         # Create new progress bar if source or phase changed
         phase_key = f"{source}:{phase}"
         if phase_key != current_phase[0]:
+            # End search line if we were searching
+            if current_phase[0].endswith(":search"):
+                click.echo()  # newline after search status
             if progress_bar[0] is not None:
                 progress_bar[0].__exit__(None, None, None)
             current_phase[0] = phase_key
             current_source[0] = source
 
             # Set appropriate label
-            if phase == "search":
-                label = f"Searching {source}"
-            elif phase == "expand":
-                label = f"Expanding {source}"
+            if phase == "expand":
+                label = f"Expanding {source} (ETA shown)"
             else:
-                label = f"Fetching {source}"
+                label = f"Fetching {source} (ETA shown)"
 
             progress_bar[0] = click.progressbar(
                 length=total,
@@ -323,7 +338,7 @@ def unified_fetch_cmd(
             progress_bar[0].__enter__()
 
         if progress_bar[0] is not None:
-            # Update length if total changed (for unbounded searches)
+            # Update length if total changed
             if hasattr(progress_bar[0], "length") and progress_bar[0].length < total:
                 progress_bar[0].length = total
             progress_bar[0].update(1)
