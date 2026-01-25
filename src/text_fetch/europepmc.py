@@ -15,13 +15,15 @@ from __future__ import annotations
 __all__ = [
     "EuropePMCClient",
     "EuropePMCArticle",
+    "ExpansionResult",
+    "expand_papers",
     "fetch_europepmc",
 ]
 
 import contextlib
 import logging
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -64,6 +66,40 @@ class EuropePMCArticle:
         return f"EPMC{self.id}"
 
 
+@dataclass
+class ExpansionResult:
+    """Result of citation/reference expansion.
+
+    Attributes:
+        expanded_papers: Papers discovered through expansion, grouped by depth.
+        config: Expansion configuration used.
+        seed_coverage: Statistics about seed paper citation/reference availability.
+        expansion_stats: Statistics about the expansion results.
+        id_issues: Problems encountered with paper identifiers.
+        layers: Summary of papers at each depth level.
+    """
+
+    expanded_papers: dict[int, list[dict]] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    seed_coverage: dict[str, Any] = field(default_factory=dict)
+    expansion_stats: dict[str, Any] = field(default_factory=dict)
+    id_issues: dict[str, list[str]] = field(default_factory=dict)
+    layers: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def total_expanded(self) -> int:
+        """Total number of unique expanded papers."""
+        return sum(len(papers) for papers in self.expanded_papers.values())
+
+    @property
+    def all_papers(self) -> list[dict]:
+        """Flat list of all expanded papers."""
+        result: list[dict] = []
+        for papers in self.expanded_papers.values():
+            result.extend(papers)
+        return result
+
+
 class EuropePMCClient:
     """Europe PMC REST API client.
 
@@ -90,7 +126,9 @@ class EuropePMCClient:
 
         self.session.headers.update(
             {
-                "User-Agent": f"text-fetch/{__version__} (scientific literature acquisition)",
+                "User-Agent": (
+                    f"text-fetch/{__version__} (scientific literature acquisition)"
+                ),
                 "Accept": "application/json, application/xml",
             }
         )
@@ -554,6 +592,342 @@ class EuropePMCClient:
             parts.append("HAS_FT:Y")
 
         return " AND ".join(parts) if parts else "*"
+
+
+# =============================================================================
+# Expansion Helper Functions
+# =============================================================================
+
+
+def _get_best_id(paper: dict) -> tuple[str | None, str | None]:
+    """Extract best available identifier from paper metadata.
+
+    Uses priority: PMCID > PMID > DOI for API lookups.
+
+    Args:
+        paper: Paper metadata dict with pmcid, pmid, and/or doi fields.
+
+    Returns:
+        (source, identifier) tuple for Europe PMC API, or (None, None).
+    """
+    pmcid = paper.get("pmcid")
+    if pmcid:
+        # Normalize PMCID - remove prefix for API call
+        if pmcid.upper().startswith("PMC"):
+            pmcid = pmcid[3:]
+        return ("PMC", pmcid)
+
+    pmid = paper.get("pmid") or paper.get("id")
+    source = paper.get("source", "")
+    if pmid and source == "MED":
+        return ("MED", str(pmid))
+
+    # DOI requires search lookup, not direct API call
+    # Return None for now - could enhance later
+    return (None, None)
+
+
+def _get_canonical_key(paper: dict) -> str | None:
+    """Get canonical key for deduplication.
+
+    Uses priority: DOI (most universal) > PMCID > PMID.
+
+    Args:
+        paper: Paper metadata dict.
+
+    Returns:
+        Canonical key string or None if no usable ID.
+    """
+    doi = paper.get("doi")
+    if doi:
+        return f"doi:{doi.lower()}"
+
+    pmcid = paper.get("pmcid")
+    if pmcid:
+        # Normalize PMCID
+        pmcid_upper = pmcid.upper()
+        if not pmcid_upper.startswith("PMC"):
+            pmcid_upper = f"PMC{pmcid_upper}"
+        return f"pmcid:{pmcid_upper}"
+
+    pmid = paper.get("pmid") or paper.get("id")
+    source = paper.get("source", "")
+    if pmid and source == "MED":
+        return f"pmid:{pmid}"
+
+    return None
+
+
+def _get_canonical_key_from_article(article: EuropePMCArticle) -> str | None:
+    """Get canonical key from EuropePMCArticle object."""
+    if article.doi:
+        return f"doi:{article.doi.lower()}"
+    if article.pmcid:
+        return f"pmcid:{article.pmcid.upper()}"
+    if article.pmid:
+        return f"pmid:{article.pmid}"
+    return None
+
+
+def _article_to_dict(article: EuropePMCArticle) -> dict:
+    """Convert EuropePMCArticle to dict for expansion processing."""
+    return {
+        "id": article.id,
+        "source": article.source,
+        "pmid": article.pmid,
+        "pmcid": article.pmcid,
+        "doi": article.doi,
+        "title": article.title,
+    }
+
+
+# =============================================================================
+# Expansion Function
+# =============================================================================
+
+
+def expand_papers(
+    client: EuropePMCClient,
+    seeds: list[EuropePMCArticle],
+    expand_references: bool = False,
+    expand_citations: bool = False,
+    depth: int = 1,
+    max_expansion: int | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> ExpansionResult:
+    """Expand seed papers by following citation relationships.
+
+    Uses breadth-first search to discover related papers through
+    citation and reference links.
+
+    Args:
+        client: Europe PMC client instance.
+        seeds: List of seed papers to expand from.
+        expand_references: If True, follow references (papers seeds cite).
+        expand_citations: If True, follow citations (papers citing seeds).
+        depth: Number of expansion hops (1 = direct only).
+        max_expansion: Optional cap on total expanded papers.
+        progress_callback: Optional callback(stage, current, total).
+
+    Returns:
+        ExpansionResult with expanded papers and metadata.
+    """
+    from collections import deque
+
+    # Track configuration
+    config = {
+        "expand_references": expand_references,
+        "expand_citations": expand_citations,
+        "depth": depth,
+        "max_expansion": max_expansion,
+    }
+
+    # Initialize tracking
+    seen_keys: set[str] = set()
+    id_issues: dict[str, list[str]] = {
+        "no_id": [],
+        "lookup_failed": [],
+    }
+
+    # Add seeds to seen set
+    seeds_with_citations = 0
+    seeds_with_references = 0
+    seeds_with_both = 0
+    seeds_with_neither = 0
+
+    for seed in seeds:
+        key = _get_canonical_key_from_article(seed)
+        if key:
+            seen_keys.add(key)
+
+    # Determine expansion directions
+    directions: list[str] = []
+    if expand_references:
+        directions.append("references")
+    if expand_citations:
+        directions.append("citations")
+
+    if not directions:
+        # No expansion requested
+        return ExpansionResult(
+            expanded_papers={},
+            config=config,
+            seed_coverage={
+                "total_seeds": len(seeds),
+                "seeds_with_citations": 0,
+                "seeds_with_references": 0,
+                "seeds_with_both": 0,
+                "seeds_with_neither": len(seeds),
+                "citation_coverage_pct": 0.0,
+                "reference_coverage_pct": 0.0,
+            },
+            expansion_stats={
+                "references_found": 0,
+                "citations_found": 0,
+                "total_unique": 0,
+                "duplicates_skipped": 0,
+            },
+            id_issues=id_issues,
+            layers=[{"depth": 0, "type": "seed", "count": len(seeds)}],
+        )
+
+    # BFS expansion
+    expanded_papers: dict[int, list[dict]] = {}
+    total_refs_found = 0
+    total_cites_found = 0
+    duplicates_skipped = 0
+
+    # Queue: (paper_dict, current_depth)
+    queue: deque[tuple[dict, int]] = deque()
+
+    # Initialize queue with seeds
+    for seed in seeds:
+        seed_dict = _article_to_dict(seed)
+        queue.append((seed_dict, 0))
+
+    processed_at_depth: dict[int, int] = {0: 0}
+    total_seeds = len(seeds)
+
+    while queue:
+        paper, current_depth = queue.popleft()
+
+        # Don't expand beyond max depth
+        if current_depth >= depth:
+            continue
+
+        # Check max_expansion limit
+        total_expanded = sum(len(p) for p in expanded_papers.values())
+        if max_expansion and total_expanded >= max_expansion:
+            break
+
+        # Get best ID for API lookup
+        source, identifier = _get_best_id(paper)
+        if not source or not identifier:
+            title = paper.get("title", "Unknown")[:50]
+            id_issues["no_id"].append(title)
+            continue
+
+        # Track progress
+        processed_at_depth[current_depth] = processed_at_depth.get(current_depth, 0) + 1
+        if progress_callback and current_depth == 0:
+            progress_callback("expanding", processed_at_depth[0], total_seeds)
+
+        # Track seed coverage
+        if current_depth == 0:
+            has_cites = False
+            has_refs = False
+
+            if "citations" in directions:
+                cites, _ = client.get_citations(source, identifier, page_size=1)
+                has_cites = len(cites) > 0
+
+            if "references" in directions:
+                refs, _ = client.get_references(source, identifier, page_size=1)
+                has_refs = len(refs) > 0
+
+            if has_cites:
+                seeds_with_citations += 1
+            if has_refs:
+                seeds_with_references += 1
+            if has_cites and has_refs:
+                seeds_with_both += 1
+            if not has_cites and not has_refs:
+                seeds_with_neither += 1
+
+        # Get related papers
+        next_depth = current_depth + 1
+        if next_depth not in expanded_papers:
+            expanded_papers[next_depth] = []
+
+        for direction in directions:
+            try:
+                if direction == "citations":
+                    related = client.get_all_citations(source, identifier)
+                    total_cites_found += len(related)
+                else:
+                    related = client.get_all_references(source, identifier)
+                    total_refs_found += len(related)
+
+                for related_paper in related:
+                    canonical_key = _get_canonical_key(related_paper)
+                    if not canonical_key:
+                        continue
+
+                    if canonical_key in seen_keys:
+                        duplicates_skipped += 1
+                        continue
+
+                    seen_keys.add(canonical_key)
+
+                    # Check max_expansion
+                    total_so_far = sum(len(p) for p in expanded_papers.values())
+                    if max_expansion and total_so_far >= max_expansion:
+                        break
+
+                    # Add paper type annotation
+                    related_paper["_expansion_type"] = direction
+                    related_paper["_expansion_depth"] = next_depth
+                    expanded_papers[next_depth].append(related_paper)
+
+                    # Queue for further expansion if we have a usable ID
+                    if _get_best_id(related_paper)[0] and next_depth < depth:
+                        queue.append((related_paper, next_depth))
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to get %s for %s/%s: %s",
+                    direction,
+                    source,
+                    identifier,
+                    e,
+                )
+                id_issues["lookup_failed"].append(f"{source}/{identifier}")
+
+    # Build layers summary
+    layers: list[dict[str, Any]] = [{"depth": 0, "type": "seed", "count": len(seeds)}]
+    for d in sorted(expanded_papers.keys()):
+        papers_at_depth = expanded_papers[d]
+        refs_at_depth = sum(
+            1 for p in papers_at_depth if p.get("_expansion_type") == "references"
+        )
+        cites_at_depth = sum(
+            1 for p in papers_at_depth if p.get("_expansion_type") == "citations"
+        )
+        if refs_at_depth > 0:
+            layers.append({"depth": d, "type": "reference", "count": refs_at_depth})
+        if cites_at_depth > 0:
+            layers.append({"depth": d, "type": "citation", "count": cites_at_depth})
+
+    # Calculate coverage percentages
+    cite_pct = (seeds_with_citations / len(seeds) * 100) if seeds else 0.0
+    ref_pct = (seeds_with_references / len(seeds) * 100) if seeds else 0.0
+
+    return ExpansionResult(
+        expanded_papers=expanded_papers,
+        config=config,
+        seed_coverage={
+            "total_seeds": len(seeds),
+            "seeds_with_citations": seeds_with_citations,
+            "seeds_with_references": seeds_with_references,
+            "seeds_with_both": seeds_with_both,
+            "seeds_with_neither": seeds_with_neither,
+            "citation_coverage_pct": round(cite_pct, 1),
+            "reference_coverage_pct": round(ref_pct, 1),
+        },
+        expansion_stats={
+            "references_found": total_refs_found,
+            "citations_found": total_cites_found,
+            "total_unique": sum(len(p) for p in expanded_papers.values()),
+            "duplicates_skipped": duplicates_skipped,
+        },
+        id_issues=id_issues,
+        layers=layers,
+    )
+
+
+# =============================================================================
+# Fetch Function
+# =============================================================================
 
 
 def fetch_europepmc(
