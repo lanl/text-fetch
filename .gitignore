@@ -27,5 +27,6 @@ text-fetch.toml
 # Project-specific
 /pubmed_access.py
 prompt.rtf
+prompt.md
 .coverage
 output/

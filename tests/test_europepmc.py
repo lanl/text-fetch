@@ -500,6 +500,345 @@ class TestEuropePMCClient:
 
         assert len(articles) == 5
 
+    def test_get_citations_success(self, requests_mock) -> None:
+        """get_citations returns citing papers."""
+        response = {
+            "hitCount": 2,
+            "citationList": {
+                "citation": [
+                    {
+                        "id": "11111111",
+                        "source": "MED",
+                        "title": "Citing Paper 1",
+                        "pubYear": "2024",
+                    },
+                    {
+                        "id": "22222222",
+                        "source": "MED",
+                        "title": "Citing Paper 2",
+                        "pubYear": "2024",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/32487503/citations/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        citations, total = client.get_citations("MED", "32487503")
+
+        assert total == 2
+        assert len(citations) == 2
+        assert citations[0]["title"] == "Citing Paper 1"
+
+    def test_get_citations_normalizes_pmcid(self, requests_mock) -> None:
+        """get_citations removes PMC prefix from PMCID."""
+        response = {
+            "hitCount": 1,
+            "citationList": {
+                "citation": [
+                    {"id": "11111111", "source": "MED", "title": "Test"},
+                ]
+            },
+        }
+        # Note: endpoint should NOT have PMC prefix
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/7343657/citations/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        citations, total = client.get_citations("PMC", "PMC7343657")
+
+        assert total == 1
+        assert len(citations) == 1
+
+    def test_get_citations_empty(self, requests_mock) -> None:
+        """get_citations returns empty list when no citations."""
+        response = {
+            "hitCount": 0,
+            "citationList": {},
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/99999999/citations/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        citations, total = client.get_citations("MED", "99999999")
+
+        assert total == 0
+        assert citations == []
+
+    def test_get_citations_single_result(self, requests_mock) -> None:
+        """get_citations handles single citation returned as dict."""
+        response = {
+            "hitCount": 1,
+            "citationList": {
+                "citation": {"id": "11111111", "source": "MED", "title": "Single"},
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        citations, total = client.get_citations("MED", "12345678")
+
+        assert total == 1
+        assert len(citations) == 1
+        assert citations[0]["title"] == "Single"
+
+    def test_get_citations_api_error(self, requests_mock) -> None:
+        """get_citations returns empty on API error."""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            status_code=500,
+        )
+
+        client = EuropePMCClient()
+        citations, total = client.get_citations("MED", "12345678")
+
+        assert total == 0
+        assert citations == []
+
+    def test_get_references_success(self, requests_mock) -> None:
+        """get_references returns referenced papers."""
+        response = {
+            "hitCount": 2,
+            "referenceList": {
+                "reference": [
+                    {
+                        "id": "33333333",
+                        "source": "MED",
+                        "title": "Referenced Paper 1",
+                        "pubYear": "2020",
+                    },
+                    {
+                        "id": "44444444",
+                        "source": "MED",
+                        "title": "Referenced Paper 2",
+                        "pubYear": "2019",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/32487503/references/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        references, total = client.get_references("MED", "32487503")
+
+        assert total == 2
+        assert len(references) == 2
+        assert references[0]["title"] == "Referenced Paper 1"
+
+    def test_get_references_normalizes_pmcid(self, requests_mock) -> None:
+        """get_references removes PMC prefix from PMCID."""
+        response = {
+            "hitCount": 1,
+            "referenceList": {
+                "reference": [
+                    {"id": "11111111", "source": "MED", "title": "Test"},
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/7343657/references/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        references, total = client.get_references("PMC", "PMC7343657")
+
+        assert total == 1
+        assert len(references) == 1
+
+    def test_get_references_empty(self, requests_mock) -> None:
+        """get_references returns empty list when no references."""
+        response = {
+            "hitCount": 0,
+            "referenceList": {},
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/99999999/references/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        references, total = client.get_references("MED", "99999999")
+
+        assert total == 0
+        assert references == []
+
+    def test_get_references_single_result(self, requests_mock) -> None:
+        """get_references handles single reference returned as dict."""
+        response = {
+            "hitCount": 1,
+            "referenceList": {
+                "reference": {"id": "11111111", "source": "MED", "title": "Single"},
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        references, total = client.get_references("MED", "12345678")
+
+        assert total == 1
+        assert len(references) == 1
+        assert references[0]["title"] == "Single"
+
+    def test_get_references_api_error(self, requests_mock) -> None:
+        """get_references returns empty on API error."""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            status_code=500,
+        )
+
+        client = EuropePMCClient()
+        references, total = client.get_references("MED", "12345678")
+
+        assert total == 0
+        assert references == []
+
+    def test_get_all_citations_pagination(self, requests_mock) -> None:
+        """get_all_citations handles pagination."""
+        # First page
+        response1 = {
+            "hitCount": 3,
+            "citationList": {
+                "citation": [
+                    {"id": "1", "source": "MED", "title": "Citation 1"},
+                    {"id": "2", "source": "MED", "title": "Citation 2"},
+                ]
+            },
+        }
+        # Second page
+        response2 = {
+            "hitCount": 3,
+            "citationList": {
+                "citation": [
+                    {"id": "3", "source": "MED", "title": "Citation 3"},
+                ]
+            },
+        }
+        # Third page (empty - end of results)
+        response3 = {
+            "hitCount": 3,
+            "citationList": {},
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            json=response1,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/2/1000/json",
+            json=response2,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/3/1000/json",
+            json=response3,
+        )
+
+        client = EuropePMCClient()
+        citations = client.get_all_citations("MED", "12345678")
+
+        assert len(citations) == 3
+
+    def test_get_all_citations_max_results(self, requests_mock) -> None:
+        """get_all_citations respects max_results."""
+        response = {
+            "hitCount": 100,
+            "citationList": {
+                "citation": [
+                    {"id": str(i), "source": "MED", "title": f"Citation {i}"}
+                    for i in range(10)
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        citations = client.get_all_citations("MED", "12345678", max_results=5)
+
+        assert len(citations) == 5
+
+    def test_get_all_references_pagination(self, requests_mock) -> None:
+        """get_all_references handles pagination."""
+        # First page
+        response1 = {
+            "hitCount": 3,
+            "referenceList": {
+                "reference": [
+                    {"id": "1", "source": "MED", "title": "Reference 1"},
+                    {"id": "2", "source": "MED", "title": "Reference 2"},
+                ]
+            },
+        }
+        # Second page
+        response2 = {
+            "hitCount": 3,
+            "referenceList": {
+                "reference": [
+                    {"id": "3", "source": "MED", "title": "Reference 3"},
+                ]
+            },
+        }
+        # Third page (empty - end of results)
+        response3 = {
+            "hitCount": 3,
+            "referenceList": {},
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            json=response1,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/2/1000/json",
+            json=response2,
+        )
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/3/1000/json",
+            json=response3,
+        )
+
+        client = EuropePMCClient()
+        references = client.get_all_references("MED", "12345678")
+
+        assert len(references) == 3
+
+    def test_get_all_references_max_results(self, requests_mock) -> None:
+        """get_all_references respects max_results."""
+        response = {
+            "hitCount": 100,
+            "referenceList": {
+                "reference": [
+                    {"id": str(i), "source": "MED", "title": f"Reference {i}"}
+                    for i in range(10)
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        references = client.get_all_references("MED", "12345678", max_results=5)
+
+        assert len(references) == 5
+
 
 class TestFetchEuropepmc:
     """Tests for fetch_europepmc function."""

@@ -349,6 +349,162 @@ class EuropePMCClient:
             pmcid = f"PMC{pmcid}"
         return pmcid
 
+    def get_citations(
+        self,
+        source: str,
+        identifier: str,
+        page: int = 1,
+        page_size: int = 1000,
+    ) -> tuple[list[dict], int]:
+        """Get papers that cite the given paper.
+
+        Args:
+            source: Data source (MED, PMC, PPR, etc.).
+            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            page: Page number (1-indexed).
+            page_size: Results per page (max 1000).
+
+        Returns:
+            Tuple of (list of citation dicts, total count).
+        """
+        # Normalize identifier - remove PMC prefix if present for API call
+        if source == "PMC" and identifier.upper().startswith("PMC"):
+            identifier = identifier[3:]
+
+        endpoint = f"/{source}/{identifier}/citations/{page}/{page_size}/json"
+        data = self._request(endpoint)
+
+        if not data:
+            return [], 0
+
+        citation_list = data.get("citationList", {})
+        citations = citation_list.get("citation", [])
+        # Handle case where API returns single citation as dict instead of list
+        if isinstance(citations, dict):
+            citations = [citations]
+
+        total = data.get("hitCount", len(citations))
+        return citations, total
+
+    def get_references(
+        self,
+        source: str,
+        identifier: str,
+        page: int = 1,
+        page_size: int = 1000,
+    ) -> tuple[list[dict], int]:
+        """Get papers cited by the given paper (references).
+
+        Args:
+            source: Data source (MED, PMC, PPR, etc.).
+            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            page: Page number (1-indexed).
+            page_size: Results per page (max 1000).
+
+        Returns:
+            Tuple of (list of reference dicts, total count).
+        """
+        # Normalize identifier - remove PMC prefix if present for API call
+        if source == "PMC" and identifier.upper().startswith("PMC"):
+            identifier = identifier[3:]
+
+        endpoint = f"/{source}/{identifier}/references/{page}/{page_size}/json"
+        data = self._request(endpoint)
+
+        if not data:
+            return [], 0
+
+        reference_list = data.get("referenceList", {})
+        references = reference_list.get("reference", [])
+        # Handle case where API returns single reference as dict instead of list
+        if isinstance(references, dict):
+            references = [references]
+
+        total = data.get("hitCount", len(references))
+        return references, total
+
+    def get_all_citations(
+        self,
+        source: str,
+        identifier: str,
+        max_results: int | None = None,
+    ) -> list[dict]:
+        """Get all citations with automatic pagination.
+
+        Args:
+            source: Data source (MED, PMC, PPR, etc.).
+            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            max_results: Optional cap on total results.
+
+        Returns:
+            List of all citation dicts.
+        """
+        all_citations: list[dict] = []
+        page = 1
+        page_size = 1000
+
+        while True:
+            citations, total = self.get_citations(source, identifier, page, page_size)
+
+            if not citations:
+                break
+
+            all_citations.extend(citations)
+
+            # Check if we've reached max_results
+            if max_results and len(all_citations) >= max_results:
+                all_citations = all_citations[:max_results]
+                break
+
+            # Check if we've fetched all available
+            if len(all_citations) >= total:
+                break
+
+            page += 1
+
+        return all_citations
+
+    def get_all_references(
+        self,
+        source: str,
+        identifier: str,
+        max_results: int | None = None,
+    ) -> list[dict]:
+        """Get all references with automatic pagination.
+
+        Args:
+            source: Data source (MED, PMC, PPR, etc.).
+            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            max_results: Optional cap on total results.
+
+        Returns:
+            List of all reference dicts.
+        """
+        all_references: list[dict] = []
+        page = 1
+        page_size = 1000
+
+        while True:
+            references, total = self.get_references(source, identifier, page, page_size)
+
+            if not references:
+                break
+
+            all_references.extend(references)
+
+            # Check if we've reached max_results
+            if max_results and len(all_references) >= max_results:
+                all_references = all_references[:max_results]
+                break
+
+            # Check if we've fetched all available
+            if len(all_references) >= total:
+                break
+
+            page += 1
+
+        return all_references
+
     @staticmethod
     def build_query(
         author: str | None = None,
