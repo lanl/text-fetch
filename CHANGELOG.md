@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Batch PMCID Lookup** - 6× faster PMCID resolution during citation expansion
+  - New `batch_lookup_pmids()` method in `EuropePMCClient`
+  - Uses Europe PMC's multi-ID search: `EXT_ID:(id1 OR id2 OR ...)`
+  - 252 papers: 8.7s (before: 53s) - 6× improvement
+  - Batches up to 50 PMIDs per API call (configurable)
+  - Handles duplicates and empty lists gracefully
+  - Added 7 unit tests for batch lookup
+
 ## [0.3.1] - 2026-01-25
 
 ### Added
