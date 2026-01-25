@@ -102,6 +102,23 @@ text-fetch compare -r expert_dois.txt -c auto_corpus.tar.gz --normalize
 - **Removed arbitrary `--max-expansion` cap** - Default changed from 5000 to 0 (unlimited) since rate limiting already handles API load
 - **Tarball ID extraction supports all manifest schemas** - `extract_ids_from_tarball()` now handles `articles`, `per_source`, and `files` manifest formats
 - **Europe PMC PMC-source download failure** - Fixed 404 errors when downloading PMC-source articles (`SRC:PMC`). Europe PMC doesn't host full-text XML for PMC articles - they only store metadata. For `source="PMC"` articles, text-fetch now uses NCBI's efetch API to download the actual JATS XML. Requires `--email` option or `NCBI_EMAIL` env var for PMC-source articles.
+- **Citation expansion uses correct source for API lookups** - Fixed issue where MED-source articles (with PMCIDs) were queried using PMC endpoint. Now uses article's actual source (MED/PMID for MED-source, PMC/PMCID for PMC-source).
+- **PMCID lookup for expanded papers** - Citation/reference API returns minimal metadata without PMCIDs. Now looks up each MED-source paper by PMID to resolve PMCIDs before downloading full-text.
+- **Config file support for NCBI credentials** - `--email` and `--api-key` can now be loaded from `text-fetch.toml` (ncbi.email, ncbi.api_key) in addition to CLI options and environment variables.
+
+### Improved
+- **Progress reporting clarity** - Completely rewritten CLI output with clear section headers:
+  - SEED PAPERS section shows "Query matched: 10 articles / With PMCIDs: 6 / Without PMCIDs: 4"
+  - CITATION EXPANSION section separates discovered vs downloadable counts
+  - References and citations tracked separately
+  - CORPUS SUMMARY with clear totals
+- **Timing information** - Added timing breakdown showing:
+  - Seed download time
+  - Citation expansion time
+  - PMCID lookup time (often the bottleneck)
+  - Expanded download time
+  - Total elapsed time
+- **PMC-source citation data warning** - Documented that `SRC:PMC` queries return 0 citations/references because Europe PMC's citation graph primarily indexes MED-source articles
 
 ### Tests
 - Added 57 new tests for corpus comparison (`test_compare.py`)
