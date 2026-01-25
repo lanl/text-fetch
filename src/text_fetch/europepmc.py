@@ -607,30 +607,51 @@ class EuropePMCClient:
 
 
 def _get_best_id(paper: dict) -> tuple[str | None, str | None]:
-    """Extract best available identifier from paper metadata.
+    """Extract best identifier for Europe PMC citation/reference API.
 
-    Uses priority: PMCID > PMID > DOI for API lookups.
+    For citation/reference lookups, we must use the article's ACTUAL source
+    and primary identifier, not just any available ID.
+
+    Priority: Use article's source + corresponding ID
+    - MED source → use PMID
+    - PMC source → use PMCID
+    - Other sources → use source + id
 
     Args:
-        paper: Paper metadata dict with pmcid, pmid, and/or doi fields.
+        paper: Paper metadata dict with source, id, pmcid, pmid, and/or doi.
 
     Returns:
         (source, identifier) tuple for Europe PMC API, or (None, None).
     """
+    source = paper.get("source", "")
+
+    # Use the article's actual source and corresponding ID
+    if source == "MED":
+        pmid = paper.get("pmid") or paper.get("id")
+        if pmid:
+            return ("MED", str(pmid))
+
+    if source == "PMC":
+        pmcid = paper.get("pmcid")
+        if pmcid:
+            # Normalize PMCID - remove prefix for API call
+            if str(pmcid).upper().startswith("PMC"):
+                pmcid = str(pmcid)[3:]
+            return ("PMC", str(pmcid))
+
+    # Fallback: try pmcid if available (for papers without source info)
     pmcid = paper.get("pmcid")
     if pmcid:
-        # Normalize PMCID - remove prefix for API call
-        if pmcid.upper().startswith("PMC"):
-            pmcid = pmcid[3:]
-        return ("PMC", pmcid)
+        if str(pmcid).upper().startswith("PMC"):
+            pmcid = str(pmcid)[3:]
+        return ("PMC", str(pmcid))
 
+    # Fallback: try pmid if available
     pmid = paper.get("pmid") or paper.get("id")
-    source = paper.get("source", "")
-    if pmid and source == "MED":
+    if pmid:
         return ("MED", str(pmid))
 
     # DOI requires search lookup, not direct API call
-    # Return None for now - could enhance later
     return (None, None)
 
 
