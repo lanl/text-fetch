@@ -266,14 +266,14 @@ def europepmc_fetch(
         client = EuropePMCClient()
 
         # Get seed articles for expansion
-        # FIX: If --pmcid was provided, use those directly as seeds
+        # Any article with a PMCID can be expanded (we download from NCBI)
         if pmcid:
             # Direct PMCID lookup for seeds
             click.echo(f"Using {len(pmcid)} provided PMCIDs as expansion seeds...")
             seeds = []
             for pmcid_val in pmcid:
                 article = client.get_by_pmcid(pmcid_val)
-                if article and article.pmcid and article.has_full_text:
+                if article and article.pmcid:
                     seeds.append(article)
         else:
             # Build query to get seed articles
@@ -286,11 +286,12 @@ def europepmc_fetch(
                     date_from=date_from,
                     date_to=date_to,
                     open_access_only=not include_non_oa,
-                    has_full_text=True,
+                    has_full_text=False,  # Don't filter by Europe PMC's flag
                 )
 
             seeds = list(client.iter_search(seed_query, max_results=max_results))
-            seeds = [s for s in seeds if s.pmcid and s.has_full_text]
+            # Filter for articles with PMCIDs (can be downloaded from NCBI)
+            seeds = [s for s in seeds if s.pmcid]
 
         if not seeds:
             click.echo("No seed papers with PMCID available for expansion.")
