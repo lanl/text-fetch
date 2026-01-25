@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 
 from ._common import handle_tarball_creation
+
+if TYPE_CHECKING:
+    from ..europepmc import ExpansionResult
 
 
 @click.group()
@@ -41,6 +46,45 @@ def europepmc(ctx: click.Context) -> None:
     is_flag=True,
     help="Only fetch papers since last fetch (requires workspace)",
 )
+# Expansion options
+@click.option(
+    "--expand-references",
+    is_flag=True,
+    help="Expand by following references (papers seeds cite)",
+)
+@click.option(
+    "--expand-citations",
+    is_flag=True,
+    help="Expand by following citations (papers citing seeds)",
+)
+@click.option(
+    "--expand",
+    is_flag=True,
+    help="Expand both directions (shorthand for --expand-references --expand-citations)",
+)
+@click.option(
+    "--expansion-depth",
+    type=int,
+    default=1,
+    help="Expansion depth / hops (default: 1)",
+)
+@click.option(
+    "--max-expansion",
+    type=int,
+    default=5000,
+    help="Max expanded papers (0=unlimited, default: 5000)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview expansion stats, prompt before proceeding",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Auto-confirm dry-run prompt",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -59,11 +103,18 @@ def europepmc_fetch(
     workspace: str | None,
     resume: bool,
     update: bool,
+    expand_references: bool,
+    expand_citations: bool,
+    expand: bool,
+    expansion_depth: int,
+    max_expansion: int,
+    dry_run: bool,
+    yes: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
 ) -> None:
-    """Fetch articles from Europe PMC.
+    """Fetch articles from Europe PMC with optional citation expansion.
 
     Downloads native JATS XML (no GROBID required).
 
@@ -75,34 +126,38 @@ def europepmc_fetch(
         # Search with keywords
         text-fetch europepmc fetch --keyword "systems biology" --out ./output
 
-        # Date range
-        text-fetch europepmc fetch --author "perelson" \\
-            --date-from 2020-01-01 --out ./output
+        # Expand by following references (papers seeds cite)
+        text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
+            --expand-references --out ./output
 
-        # Raw Lucene query
-        text-fetch europepmc fetch \\
-            --query 'AUTH:"hlavacek" AND TITLE:modeling' --out ./output
+        # Expand by following citations (papers citing seeds)
+        text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
+            --expand-citations --out ./output
 
-        # Specific PMC IDs
-        text-fetch europepmc fetch --pmcid PMC123456 --pmcid PMC789012 \\
-            --out ./output
+        # Both directions
+        text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
+            --expand --out ./output
+
+        # Preview expansion (dry-run)
+        text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
+            --expand --dry-run --out ./output
+
+        # Custom expansion options
+        text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
+            --expand --expansion-depth 2 --max-expansion 10000 --out ./output
 
         # Add to workspace for deduplication
         text-fetch europepmc fetch --author "hlavacek ws" \\
             --workspace ./my-corpus --out ./output
-
-        # Resume interrupted fetch
-        text-fetch europepmc fetch --author "hlavacek ws" \\
-            --out ./output --resume
-
-        # Update mode: fetch only new papers since last fetch
-        text-fetch europepmc fetch --author "hlavacek ws" \\
-            --workspace ./my-corpus --update
     """
     import logging
     import sys
 
-    from ..europepmc import fetch_europepmc
+    from ..europepmc import (
+        EuropePMCClient,
+        expand_papers,
+        fetch_europepmc,
+    )
     from ..workspace import Workspace
 
     # Validate update flag
@@ -112,6 +167,13 @@ def europepmc_fetch(
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
 
+    # Resolve expansion flags
+    do_expand_refs = expand_references or expand
+    do_expand_cites = expand_citations or expand
+
+    # Resolve max_expansion (0 means unlimited)
+    effective_max_expansion = max_expansion if max_expansion > 0 else None
+
     # Load or create workspace if specified
     ws = None
     if workspace:
@@ -120,7 +182,7 @@ def europepmc_fetch(
         if verbose:
             click.echo(f"Using workspace: {ws_path}")
 
-    # Progress bar
+    # Progress bar for seed fetch
     progress_bar = None
 
     def progress_callback(pmcid_str: str, current: int, total: int) -> None:
@@ -128,7 +190,7 @@ def europepmc_fetch(
         if progress_bar is None:
             progress_bar = click.progressbar(
                 length=total,
-                label="Fetching articles",
+                label="Fetching seed articles",
                 show_pos=True,
                 show_percent=True,
             )
@@ -136,6 +198,7 @@ def europepmc_fetch(
         progress_bar.update(1)
 
     try:
+        # First, fetch seed papers
         stats = fetch_europepmc(
             query=query,
             author=author,
@@ -156,6 +219,114 @@ def europepmc_fetch(
         if progress_bar is not None:
             progress_bar.__exit__(None, None, None)
 
+    # If expansion requested and we have seeds, expand
+    expansion_result = None
+    if (do_expand_refs or do_expand_cites) and stats["full_text_available"] > 0:
+        click.echo("\n" + "=" * 50)
+        click.echo("Citation Expansion")
+        click.echo("=" * 50)
+
+        # Re-fetch seed articles for expansion (we need article objects)
+        client = EuropePMCClient()
+
+        # Build query to get seed articles
+        if query:
+            seed_query = query
+        else:
+            seed_query = EuropePMCClient.build_query(
+                author=author,
+                keywords=list(keyword) if keyword else None,
+                date_from=date_from,
+                date_to=date_to,
+                open_access_only=not include_non_oa,
+                has_full_text=True,
+            )
+
+        seeds = list(client.iter_search(seed_query, max_results=max_results))
+        seeds = [s for s in seeds if s.pmcid and s.has_full_text]
+
+        if not seeds:
+            click.echo("No seed papers with PMCID available for expansion.")
+        else:
+            click.echo(f"Expanding from {len(seeds)} seed papers...")
+            click.echo(
+                f"  Directions: "
+                f"{'references ' if do_expand_refs else ''}"
+                f"{'citations' if do_expand_cites else ''}"
+            )
+            click.echo(f"  Depth: {expansion_depth}")
+            if effective_max_expansion:
+                click.echo(f"  Max expansion: {effective_max_expansion:,}")
+
+            # Dry-run mode: preview and prompt
+            if dry_run:
+                click.echo("\nDry-run mode: gathering expansion statistics...")
+
+                # Expansion progress callback
+                def expansion_progress(stage: str, current: int, total: int) -> None:
+                    if stage == "expanding":
+                        click.echo(f"  Checking seed {current}/{total}...", nl=False)
+                        click.echo("\r", nl=False)
+
+                expansion_result = expand_papers(
+                    client=client,
+                    seeds=seeds,
+                    expand_references=do_expand_refs,
+                    expand_citations=do_expand_cites,
+                    depth=expansion_depth,
+                    max_expansion=effective_max_expansion,
+                    progress_callback=expansion_progress,
+                )
+
+                # Display dry-run report
+                _display_expansion_report(expansion_result)
+
+                # Prompt for confirmation
+                if not yes and not click.confirm("\nContinue with expansion?"):
+                    click.echo("Expansion cancelled.")
+                    expansion_result = None
+                # If confirmed, expansion_result already has the data
+
+            else:
+                # Normal mode: expand directly
+                click.echo("\nExpanding...")
+
+                def expansion_progress(stage: str, current: int, total: int) -> None:
+                    click.echo(
+                        f"\r  Processing seed {current}/{total}...",
+                        nl=False,
+                    )
+
+                expansion_result = expand_papers(
+                    client=client,
+                    seeds=seeds,
+                    expand_references=do_expand_refs,
+                    expand_citations=do_expand_cites,
+                    depth=expansion_depth,
+                    max_expansion=effective_max_expansion,
+                    progress_callback=expansion_progress,
+                )
+                click.echo()  # newline after progress
+
+            # Save expansion manifest if we have results
+            if expansion_result and expansion_result.total_expanded > 0:
+                output_path = Path(out)
+                manifest_path = output_path / "expansion_manifest.json"
+                manifest_data = {
+                    "expansion_config": expansion_result.config,
+                    "seed_coverage": expansion_result.seed_coverage,
+                    "expansion_stats": expansion_result.expansion_stats,
+                    "id_issues": {
+                        "no_id_count": len(expansion_result.id_issues.get("no_id", [])),
+                        "lookup_failed_count": len(
+                            expansion_result.id_issues.get("lookup_failed", [])
+                        ),
+                    },
+                    "layers": expansion_result.layers,
+                }
+                manifest_path.write_text(json.dumps(manifest_data, indent=2))
+                click.echo(f"\nExpansion manifest saved: {manifest_path}")
+
     # Record search in workspace
     if ws:
         # Build command string
@@ -171,6 +342,10 @@ def europepmc_fetch(
             "pmcids": list(pmcid) if pmcid else None,
             "max_results": max_results,
             "open_access_only": not include_non_oa,
+            "expand_references": do_expand_refs,
+            "expand_citations": do_expand_cites,
+            "expansion_depth": expansion_depth,
+            "max_expansion": max_expansion,
         }
         ws.record_search(
             config=search_config,
@@ -191,6 +366,24 @@ def europepmc_fetch(
     if stats.get("duplicates_skipped"):
         click.echo(f"  Duplicates skipped: {stats['duplicates_skipped']:,}")
     click.echo(f"  Errors: {stats['errors']:,}")
+
+    # Expansion summary
+    if expansion_result:
+        click.echo("\nExpansion:")
+        click.echo(f"  Total expanded: {expansion_result.total_expanded:,}")
+        click.echo(
+            f"  References found: "
+            f"{expansion_result.expansion_stats.get('references_found', 0):,}"
+        )
+        click.echo(
+            f"  Citations found: "
+            f"{expansion_result.expansion_stats.get('citations_found', 0):,}"
+        )
+        click.echo(
+            f"  Duplicates skipped: "
+            f"{expansion_result.expansion_stats.get('duplicates_skipped', 0):,}"
+        )
+
     if ws:
         click.echo(f"\nWorkspace: {ws.path}")
     else:
@@ -212,5 +405,59 @@ def europepmc_fetch(
         )
     elif tarball:
         click.echo(
-            "Note: Use 'text-fetch workspace build' to create tarball " "from workspace"
+            "Note: Use 'text-fetch workspace build' to create tarball from workspace"
         )
+
+
+def _display_expansion_report(result: ExpansionResult) -> None:
+    """Display dry-run expansion report."""
+
+    click.echo("\n" + "=" * 60)
+    click.echo("EXPANSION DRY-RUN REPORT")
+    click.echo("=" * 60)
+
+    # Seed coverage
+    sc = result.seed_coverage
+    click.echo("\nSEED COVERAGE:")
+    click.echo(f"  Total seeds found:        {sc.get('total_seeds', 0):>6}")
+    click.echo(
+        f"  Seeds with citations:     {sc.get('seeds_with_citations', 0):>6} "
+        f"({sc.get('citation_coverage_pct', 0):.0f}%)"
+    )
+    click.echo(
+        f"  Seeds with references:    {sc.get('seeds_with_references', 0):>6} "
+        f"({sc.get('reference_coverage_pct', 0):.0f}%)"
+    )
+    click.echo(f"  Seeds with both:          {sc.get('seeds_with_both', 0):>6}")
+    click.echo(
+        f"  Seeds with neither:       {sc.get('seeds_with_neither', 0):>6} "
+        "← may be too new or non-PMC"
+    )
+
+    # Expansion stats
+    es = result.expansion_stats
+    click.echo("\nEXPANSION RESULTS:")
+    click.echo(f"  References found:         {es.get('references_found', 0):>6}")
+    click.echo(f"  Citations found:          {es.get('citations_found', 0):>6}")
+    click.echo(f"  Total unique expanded:    {es.get('total_unique', 0):>6}")
+    click.echo(f"  Duplicates skipped:       {es.get('duplicates_skipped', 0):>6}")
+
+    # ID issues
+    no_id_count = len(result.id_issues.get("no_id", []))
+    lookup_failed = len(result.id_issues.get("lookup_failed", []))
+    if no_id_count > 0 or lookup_failed > 0:
+        click.echo("\nID ISSUES:")
+        if no_id_count > 0:
+            click.echo(f"  ⚠ {no_id_count} papers missing usable ID")
+        if lookup_failed > 0:
+            click.echo(f"  ⚠ {lookup_failed} API lookups failed")
+
+    # Layers
+    click.echo("\nLAYERS:")
+    for layer in result.layers:
+        depth = layer.get("depth", 0)
+        ltype = layer.get("type", "")
+        count = layer.get("count", 0)
+        click.echo(f"  Depth {depth} ({ltype}): {count:,} papers")
+
+    click.echo("=" * 60)
