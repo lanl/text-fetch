@@ -1,0 +1,56 @@
+{
+  "name": "Filovirus vaccine research",
+  "description": "Filovirus (Ebola, Marburg, Cueva) vaccine research - 5-year window",
+  "virus_keywords": [
+    "Filovirus",
+    "Filoviridae",
+    "Ebola virus",
+    "Ebolavirus",
+    "Zaire ebolavirus",
+    "Sudan ebolavirus",
+    "Bundibugyo ebolavirus",
+    "Reston ebolavirus",
+    "Taï Forest ebolavirus",
+    "Tai Forest ebolavirus",
+    "Marburg virus",
+    "Marburgvirus",
+    "Orthomarburgvirus marburgense",
+    "Lloviu cuevavirus",
+    "Lloviu virus",
+    "Cuevavirus",
+    "Bombali ebolavirus"
+  ],
+  "disease_keywords": [
+    "Ebola hemorrhagic fever",
+    "Ebola virus disease",
+    "Marburg hemorrhagic fever",
+    "Marburg virus disease",
+    "filovirus disease"
+  ],
+  "vaccine_keywords": [
+    "viral-vector",
+    "vaccine",
+    "vaccinated",
+    "vaccination",
+    "vaccine efficacy",
+    "vaccine safety",
+    "vaccine development",
+    "correlate of protection",
+    "clinical trial",
+    "phase 1",
+    "phase I",
+    "phase 2",
+    "phase II",
+    "phase 3",
+    "phase III",
+    "animal challenge",
+    "adjuvant",
+    "immunized",
+    "immunization",
+    "immunogenicity"
+  ],
+  "date_range": {
+    "start": "2021/01/25",
+    "end": "2026/01/25"
+  }
+}
