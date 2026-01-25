@@ -811,6 +811,33 @@ output/
 - `expansion_stats` - Total found, duplicates skipped
 - `layers` - Papers at each expansion depth
 
+**Example: Ebola Vaccine Corpus**
+
+Build a comprehensive corpus of Ebola vaccine literature (last 5 years) plus all cited and citing papers:
+
+```bash
+# First, preview expansion stats (dry-run)
+uv run text-fetch europepmc fetch \
+  --query '(ebolavirus OR "ebola virus" OR filovirus OR marburg) AND (vaccine OR vaccination OR "clinical trial") AND FIRST_PDATE:[2021-01-01 TO 2026-01-25]' \
+  --expand \
+  --dry-run \
+  --out ./output/ebola
+
+# Run full fetch with citation expansion and create tarball
+uv run text-fetch europepmc fetch \
+  --query '(ebolavirus OR "ebola virus" OR filovirus OR marburg) AND (vaccine OR vaccination OR "clinical trial") AND FIRST_PDATE:[2021-01-01 TO 2026-01-25]' \
+  --expand \
+  --out ./output/ebola \
+  --tarball
+```
+
+This will:
+1. Find seed papers matching the Ebola vaccine query (2021-2026)
+2. Expand to include all papers they cite (references)
+3. Expand to include all papers citing them (citations)
+4. Download JATS XML for all papers
+5. Create a ready-to-use tarball for RAG pipelines
+
 ### Workflow 9: Create Tarball from Existing Files (v0.2.5)
 
 Create tarballs from existing JATS files without re-running a fetch:
