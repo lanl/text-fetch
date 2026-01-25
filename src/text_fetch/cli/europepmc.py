@@ -28,7 +28,9 @@ def europepmc(ctx: click.Context) -> None:
 @click.option("--date-from", help="Start date (YYYY-MM-DD)")
 @click.option("--date-to", help="End date (YYYY-MM-DD)")
 @click.option("--pmcid", multiple=True, help="Specific PMC IDs to fetch")
-@click.option("--max-results", default=100, help="Maximum results")
+@click.option(
+    "--max-results", default=None, type=int, help="Maximum results (default: unlimited)"
+)
 @click.option("--include-non-oa", is_flag=True, help="Include non-open-access")
 @click.option("--out", required=True, help="Output directory")
 @click.option(

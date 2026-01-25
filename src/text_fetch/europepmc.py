@@ -323,16 +323,18 @@ class EuropePMCClient:
         """Download full-text JATS XML for article.
 
         Args:
-            pmcid: PMC ID (e.g., "PMC123456").
+            pmcid: PMC ID (e.g., "PMC123456" or "123456").
 
         Returns:
             JATS XML string or None if not available.
         """
-        # Normalize PMCID
+        # Normalize then strip prefix for API endpoint
+        # API expects /PMC/{id}/fullTextXML where id is numeric (no PMC prefix)
         pmcid = self.normalize_pmcid(pmcid)
+        pmcid_numeric = pmcid[3:]  # Strip "PMC" prefix
 
         # Endpoint: /{source}/{id}/fullTextXML
-        endpoint = f"/PMC/{pmcid}/fullTextXML"
+        endpoint = f"/PMC/{pmcid_numeric}/fullTextXML"
         return self._request_xml(endpoint)
 
     def get_by_pmcid(self, pmcid: str) -> EuropePMCArticle | None:
@@ -944,7 +946,7 @@ def fetch_europepmc(
     pmcids: list[str] | None = None,
     output_dir: str | Path = "europepmc_output",
     workspace: Workspace | None = None,
-    max_results: int = 100,
+    max_results: int | None = None,
     open_access_only: bool = True,
     verbose: bool = False,
     progress_callback: Callable[[str, int, int], None] | None = None,
@@ -968,7 +970,7 @@ def fetch_europepmc(
         pmcids: Alternative - list of PMC IDs to fetch directly.
         output_dir: Output directory (used if workspace is None).
         workspace: Optional workspace for deduplication and output.
-        max_results: Maximum articles to fetch.
+        max_results: Maximum articles to fetch (None = unlimited).
         open_access_only: Only fetch open access articles.
         verbose: Enable verbose logging.
         progress_callback: Optional callback(pmcid, current, total).

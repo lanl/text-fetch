@@ -321,7 +321,8 @@ class TestEuropePMCClient:
         """get_full_text_xml returns XML content."""
         xml_content = '<?xml version="1.0"?><article>Test</article>'
         url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-        requests_mock.get(f"{url}/PMC/PMC123456/fullTextXML", text=xml_content)
+        # API endpoint uses numeric ID without PMC prefix
+        requests_mock.get(f"{url}/PMC/123456/fullTextXML", text=xml_content)
 
         client = EuropePMCClient()
         result = client.get_full_text_xml("PMC123456")
@@ -332,7 +333,8 @@ class TestEuropePMCClient:
         """get_full_text_xml normalizes PMCID."""
         xml_content = "<article>Test</article>"
         url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-        requests_mock.get(f"{url}/PMC/PMC123456/fullTextXML", text=xml_content)
+        # API endpoint uses numeric ID without PMC prefix
+        requests_mock.get(f"{url}/PMC/123456/fullTextXML", text=xml_content)
 
         client = EuropePMCClient()
         result = client.get_full_text_xml("123456")  # Without PMC prefix
@@ -342,7 +344,8 @@ class TestEuropePMCClient:
     def test_get_full_text_xml_error(self, requests_mock) -> None:
         """get_full_text_xml returns None on error."""
         url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-        requests_mock.get(f"{url}/PMC/PMC123456/fullTextXML", status_code=404)
+        # API endpoint uses numeric ID without PMC prefix
+        requests_mock.get(f"{url}/PMC/123456/fullTextXML", status_code=404)
 
         client = EuropePMCClient()
         result = client.get_full_text_xml("PMC123456")
@@ -1175,8 +1178,9 @@ class TestFetchEuropepmc:
             json=search_response,
         )
         # Mock get_full_text_xml to return None (404)
+        # API endpoint uses numeric ID without PMC prefix
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/fullTextXML",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
             status_code=404,
         )
 
@@ -1230,14 +1234,14 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # First article fails
+        # First article fails - API endpoint uses numeric ID without PMC prefix
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC111111/fullTextXML",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111111/fullTextXML",
             status_code=500,
         )
         # Second article succeeds
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC222222/fullTextXML",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/222222/fullTextXML",
             text="<article><body>Test content</body></article>",
         )
 
@@ -1282,8 +1286,9 @@ class TestFetchEuropepmc:
             json=search_response,
         )
         # Mock get_full_text_xml to fail
+        # API endpoint uses numeric ID without PMC prefix
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/fullTextXML",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
             status_code=500,
         )
 
@@ -1332,7 +1337,7 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # Mock get_full_text_xml to succeed
+        # Mock get_full_text_xml to succeed - API uses numeric ID without PMC prefix
         valid_xml = """<?xml version="1.0"?>
         <article>
             <front>
@@ -1346,7 +1351,7 @@ class TestFetchEuropepmc:
             <body><p>Test content body.</p></body>
         </article>"""
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/fullTextXML",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
             text=valid_xml,
         )
 
