@@ -71,8 +71,8 @@ def europepmc(ctx: click.Context) -> None:
 @click.option(
     "--max-expansion",
     type=int,
-    default=5000,
-    help="Max expanded papers (0=unlimited, default: 5000)",
+    default=0,
+    help="Max expanded papers (0=unlimited, default: 0)",
 )
 @click.option(
     "--dry-run",
@@ -226,24 +226,34 @@ def europepmc_fetch(
         click.echo("Citation Expansion")
         click.echo("=" * 50)
 
-        # Re-fetch seed articles for expansion (we need article objects)
         client = EuropePMCClient()
 
-        # Build query to get seed articles
-        if query:
-            seed_query = query
+        # Get seed articles for expansion
+        # FIX: If --pmcid was provided, use those directly as seeds
+        if pmcid:
+            # Direct PMCID lookup for seeds
+            click.echo(f"Using {len(pmcid)} provided PMCIDs as expansion seeds...")
+            seeds = []
+            for pmcid_val in pmcid:
+                article = client.get_by_pmcid(pmcid_val)
+                if article and article.pmcid and article.has_full_text:
+                    seeds.append(article)
         else:
-            seed_query = EuropePMCClient.build_query(
-                author=author,
-                keywords=list(keyword) if keyword else None,
-                date_from=date_from,
-                date_to=date_to,
-                open_access_only=not include_non_oa,
-                has_full_text=True,
-            )
+            # Build query to get seed articles
+            if query:
+                seed_query = query
+            else:
+                seed_query = EuropePMCClient.build_query(
+                    author=author,
+                    keywords=list(keyword) if keyword else None,
+                    date_from=date_from,
+                    date_to=date_to,
+                    open_access_only=not include_non_oa,
+                    has_full_text=True,
+                )
 
-        seeds = list(client.iter_search(seed_query, max_results=max_results))
-        seeds = [s for s in seeds if s.pmcid and s.has_full_text]
+            seeds = list(client.iter_search(seed_query, max_results=max_results))
+            seeds = [s for s in seeds if s.pmcid and s.has_full_text]
 
         if not seeds:
             click.echo("No seed papers with PMCID available for expansion.")
@@ -326,6 +336,71 @@ def europepmc_fetch(
                 }
                 manifest_path.write_text(json.dumps(manifest_data, indent=2))
                 click.echo(f"\nExpansion manifest saved: {manifest_path}")
+
+                # FIX: Actually fetch the expanded papers!
+                # Extract PMCIDs from expanded papers
+                expanded_pmcids: list[str] = []
+                for papers in expansion_result.expanded_papers.values():
+                    for paper in papers:
+                        raw_pmcid = paper.get("pmcid")
+                        if raw_pmcid is None:
+                            continue
+                        # Normalize PMCID
+                        pmcid_norm = str(raw_pmcid).upper()
+                        if not pmcid_norm.startswith("PMC"):
+                            pmcid_norm = f"PMC{pmcid_norm}"
+                        expanded_pmcids.append(pmcid_norm)
+
+                if expanded_pmcids:
+                    click.echo(f"\nFetching {len(expanded_pmcids)} expanded papers...")
+
+                    # Progress bar for expanded fetch
+                    exp_progress_bar = None
+
+                    def exp_progress_cb(
+                        pmcid_str: str, current: int, total: int
+                    ) -> None:
+                        nonlocal exp_progress_bar
+                        if exp_progress_bar is None:
+                            exp_progress_bar = click.progressbar(
+                                length=total,
+                                label="Fetching expanded articles",
+                                show_pos=True,
+                                show_percent=True,
+                            )
+                            exp_progress_bar.__enter__()
+                        exp_progress_bar.update(1)
+
+                    try:
+                        exp_stats = fetch_europepmc(
+                            pmcids=expanded_pmcids,
+                            output_dir=out,
+                            workspace=ws,
+                            open_access_only=not include_non_oa,
+                            verbose=verbose,
+                            progress_callback=exp_progress_cb,
+                        )
+                    finally:
+                        if exp_progress_bar is not None:
+                            exp_progress_bar.__exit__(None, None, None)
+
+                    # Update main stats with expansion stats
+                    stats["expanded_fetched"] = exp_stats["fetched"]
+                    stats["expanded_valid"] = exp_stats["valid"]
+                    stats["expanded_errors"] = exp_stats["errors"]
+                    stats["expanded_duplicates"] = exp_stats.get(
+                        "duplicates_skipped", 0
+                    )
+
+                    click.echo("\nExpanded papers downloaded:")
+                    click.echo(f"  Fetched: {exp_stats['fetched']:,}")
+                    click.echo(f"  Valid: {exp_stats['valid']:,}")
+                    click.echo(f"  Errors: {exp_stats['errors']:,}")
+                    if exp_stats.get("duplicates_skipped"):
+                        click.echo(
+                            f"  Duplicates skipped: "
+                            f"{exp_stats['duplicates_skipped']:,}"
+                        )
 
     # Record search in workspace
     if ws:

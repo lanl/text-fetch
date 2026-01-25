@@ -90,13 +90,20 @@ text-fetch compare -r old.tar.gz -c new.tar.gz \
 - **Experimentation** - Compare corpora from different expansion methods
 - **Quality assurance** - Verify that important papers weren't missed
 
+### Fixed
+- **Europe PMC expansion now actually fetches expanded papers** - Previously expansion only wrote a manifest; now it downloads the full-text JATS XML for all expanded papers
+- **`--pmcid` seeds now used correctly for expansion** - When `--pmcid` flags are provided, those IDs are used directly as expansion seeds instead of re-running the query
+- **Removed arbitrary `--max-expansion` cap** - Default changed from 5000 to 0 (unlimited) since rate limiting already handles API load
+- **Tarball ID extraction supports all manifest schemas** - `extract_ids_from_tarball()` now handles `articles`, `per_source`, and `files` manifest formats
+
 ### Tests
 - Added 46 new tests for corpus comparison (`test_compare.py`)
+- Added 2 tests for new manifest schema support
 - Tests for `detect_id_type()`, `normalize_id()`, `parse_id_list()`
 - Tests for `extract_ids_from_tarball()`, `load_corpus_ids()`
 - Tests for `compare_corpora()` and `ComparisonResult`
 - CLI integration tests for `text-fetch compare`
-- Total test count: 558 (all passing)
+- Total test count: 560 (all passing)
 
 ## [0.3.0] - 2026-01-25
 
