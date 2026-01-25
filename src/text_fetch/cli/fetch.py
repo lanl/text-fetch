@@ -513,10 +513,19 @@ def _display_dry_run_report(
     total_unique = exp_stats.get("total_unique", 0)
     dupes = exp_stats.get("duplicates_skipped", 0)
 
+    total_raw = refs_found + cites_found
+    # Papers without usable IDs or cross-overlaps
+    unaccounted = total_raw - total_unique - dupes
+    if unaccounted < 0:
+        unaccounted = 0
+
     click.echo(f"  References discovered: {refs_found:,}")
     click.echo(f"  Citations discovered: {cites_found:,}")
-    click.echo(f"  Total unique expanded: {total_unique:,}")
-    click.echo(f"  Duplicates skipped: {dupes:,}")
+    click.echo(f"  Total discovered: {total_raw:,}")
+    click.echo(f"  - Duplicates (same paper): {dupes:,}")
+    if unaccounted > 0:
+        click.echo(f"  - No usable ID: ~{unaccounted:,}")
+    click.echo(f"  = Unique expanded: {total_unique:,}")
 
     # Layer breakdown
     layers = expansion.get("layers", [])
