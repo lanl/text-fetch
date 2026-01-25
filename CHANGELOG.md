@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-25
+
+### Added
+- **Europe PMC Citation Expansion** - Build comprehensive corpora by following citation relationships
+  - `--expand-references` flag to follow references (papers seeds cite)
+  - `--expand-citations` flag to follow citations (papers citing seeds)
+  - `--expand` shorthand for both directions
+  - `--expansion-depth` option for multi-hop expansion (default: 1)
+  - `--max-expansion` safety cap on expanded papers (default: 5000)
+  - `--dry-run` mode to preview expansion stats before proceeding
+  - `--yes/-y` flag to auto-confirm dry-run prompt
+  - `expansion_manifest.json` output with detailed statistics
+
+- **Citation/Reference API Methods** - New `EuropePMCClient` methods
+  - `get_citations(source, identifier)` - Get papers citing a paper
+  - `get_references(source, identifier)` - Get papers a paper cites
+  - `get_all_citations()` - Pagination helper for all citations
+  - `get_all_references()` - Pagination helper for all references
+
+- **Expansion Engine** - BFS-based citation graph traversal
+  - `expand_papers()` function for citation/reference expansion
+  - `ExpansionResult` dataclass for expansion results and metadata
+  - DOI-based deduplication across expansion layers
+  - Canonical key generation (DOI > PMCID > PMID priority)
+  - Best-available ID strategy for API lookups
+  - Seed coverage statistics tracking
+  - Layer-by-layer expansion tracking
+
+### CLI
+```bash
+# Expand by following references (papers seeds cite)
+text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand-references --out ./output
+
+# Expand by following citations (papers citing seeds)
+text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand-citations --out ./output
+
+# Both directions
+text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --out ./output
+
+# Preview expansion (dry-run)
+text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --dry-run --out ./output
+
+# With custom options
+text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --expansion-depth 2 --max-expansion 10000 --out ./output
+```
+
+### Expansion Manifest
+The `expansion_manifest.json` includes:
+- `expansion_config` - Options used for expansion
+- `seed_coverage` - Statistics about seed paper citation/reference availability
+- `expansion_stats` - Total references/citations found, duplicates skipped
+- `layers` - Summary of papers at each expansion depth
+
+### Tests
+- Added 8 new tests for `expand_papers()` function
+- Added 4 tests for citation/reference API methods
+- Total test count: 556 (all passing)
+
+### Motivation
+Keyword search finds papers that **say** the right words. Citation expansion finds papers that **matter** to a field:
+- **References:** Foundational papers (methods, prior work, reviews)
+- **Citations:** Recent papers building on your seeds (follow-up studies, applications)
+
 ## [0.2.6] - 2026-01-23
 
 ### Changed
