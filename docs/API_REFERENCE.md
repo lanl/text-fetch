@@ -14,7 +14,8 @@ This document provides comprehensive API documentation for text-fetch's Python l
 4. [GROBID Client](#grobid-client)
 5. [PDF Processing](#pdf-processing)
 6. [Corpus Workspace](#corpus-workspace)
-7. [Utilities](#utilities)
+7. [Corpus Comparison](#corpus-comparison)
+8. [Utilities](#utilities)
 
 ---
 
@@ -1077,6 +1078,239 @@ except SearchConfigError as e:
 
 # Source-specific errors are typically logged, not raised
 # Check stats['errors'] in return values
+```
+
+---
+
+## Corpus Comparison
+
+Compare two corpora to measure overlap and evaluate coverage (v0.3.1).
+
+### Import
+
+```python
+from text_fetch.compare import (
+    compare_corpora,
+    ComparisonResult,
+    detect_id_type,
+    normalize_id,
+    parse_id_list,
+    extract_ids_from_tarball,
+    load_corpus_ids,
+)
+```
+
+### compare_corpora()
+
+Compare two corpora and compute overlap metrics.
+
+```python
+from text_fetch.compare import compare_corpora
+from pathlib import Path
+
+result = compare_corpora(
+    reference_path=Path("expert_corpus.txt"),
+    candidate_path=Path("auto_corpus.tar.gz"),
+    reference_label="Expert (2024)",
+    candidate_label="Auto-generated",
+)
+
+# Access metrics
+print(f"Jaccard similarity: {result.jaccard:.2f}")
+print(f"Recall: {result.recall:.2f}")
+print(f"Precision: {result.precision:.2f}")
+
+# Access paper counts
+print(f"Reference papers: {len(result.reference_ids)}")
+print(f"Candidate papers: {len(result.candidate_ids)}")
+print(f"Overlap: {len(result.overlap)}")
+
+# Papers unique to each corpus
+print(f"Reference only: {len(result.reference_only)}")
+print(f"Candidate only: {len(result.candidate_only)}")
+
+# Export to JSON
+output_dict = result.to_dict()
+```
+
+**Function Signature:**
+
+```python
+def compare_corpora(
+    reference_path: Path,
+    candidate_path: Path,
+    reference_label: str | None = None,
+    candidate_label: str | None = None,
+) -> ComparisonResult:
+    """Compare two corpora and compute overlap metrics.
+    
+    Args:
+        reference_path: Path to reference corpus (tarball or ID list)
+        candidate_path: Path to candidate corpus (tarball or ID list)
+        reference_label: Optional label for reference corpus (default: filename)
+        candidate_label: Optional label for candidate corpus (default: filename)
+    
+    Returns:
+        ComparisonResult with metrics and ID sets
+    """
+```
+
+### ComparisonResult
+
+Dataclass containing comparison results.
+
+```python
+from text_fetch.compare import ComparisonResult
+
+# Fields
+result.reference_label      # Display label for reference corpus
+result.reference_source     # Path to reference file
+result.reference_ids        # Set of normalized IDs from reference
+result.reference_id_types   # Dict of ID type counts {"pmcid": N, "doi": N, ...}
+
+result.candidate_label      # Display label for candidate corpus
+result.candidate_source     # Path to candidate file
+result.candidate_ids        # Set of normalized IDs from candidate
+result.candidate_id_types   # Dict of ID type counts
+
+result.overlap              # Set of IDs in both corpora
+result.reference_only       # Set of IDs only in reference
+result.candidate_only       # Set of IDs only in candidate
+result.normalized           # Whether NCBI ID normalization was applied
+
+# Computed properties
+result.jaccard              # |A ∩ B| / |A ∪ B|
+result.recall               # |A ∩ B| / |Reference|
+result.precision            # |A ∩ B| / |Candidate|
+
+# Serialization
+output_dict = result.to_dict()
+```
+
+**to_dict() output format:**
+
+```python
+{
+    "metadata": {
+        "text_fetch_version": "0.3.1",
+        "timestamp": "2026-01-25T10:30:00Z",
+        "normalized": False,
+    },
+    "reference": {
+        "label": "Expert (2024)",
+        "source": "expert_corpus.txt",
+        "count": 312,
+        "id_types": {"pmcid": 280, "doi": 30, "pmid": 2, "unknown": 0},
+    },
+    "candidate": {
+        "label": "Auto-generated",
+        "source": "auto_corpus.tar.gz",
+        "count": 2847,
+        "id_types": {"pmcid": 2500, "doi": 347, "pmid": 0, "unknown": 0},
+    },
+    "overlap": {
+        "count": 287,
+        "jaccard": 0.10,
+        "recall": 0.92,
+        "precision": 0.10,
+    },
+    "reference_only": ["PMC111111", "PMC222222"],
+    "candidate_only": ["PMC333333", "PMC444444"],
+}
+```
+
+### ID Detection and Normalization
+
+```python
+from text_fetch.compare import detect_id_type, normalize_id
+
+# Detect ID type
+detect_id_type("PMC123456")        # → "pmcid"
+detect_id_type("pmc123456")        # → "pmcid" (case-insensitive)
+detect_id_type("10.1234/example")  # → "doi"
+detect_id_type("32847729")         # → "pmid" (7+ digits)
+detect_id_type("abc123")           # → "unknown"
+
+# Normalize IDs for comparison
+normalize_id("pmc123456")          # → "PMC123456" (uppercase)
+normalize_id("10.1234/EXAMPLE")    # → "10.1234/example" (lowercase)
+normalize_id("32847729")           # → "32847729" (unchanged)
+```
+
+### Loading Corpus IDs
+
+```python
+from text_fetch.compare import (
+    load_corpus_ids,
+    parse_id_list,
+    extract_ids_from_tarball,
+)
+from pathlib import Path
+
+# Auto-detect format and load
+ids, type_counts = load_corpus_ids(Path("corpus.tar.gz"))
+ids, type_counts = load_corpus_ids(Path("ids.txt"))
+
+# Load from text file explicitly
+ids, type_counts = parse_id_list(Path("ids.txt"))
+# type_counts = {"pmcid": 50, "doi": 30, "pmid": 5, "unknown": 2}
+
+# Extract from tarball explicitly
+ids, type_counts = extract_ids_from_tarball(Path("corpus.tar.gz"))
+```
+
+**ID List File Format:**
+
+```
+# corpus_ids.txt
+PMC123456
+PMC789012
+10.1016/j.cell.2020.01.001
+32847729
+# Comments (lines starting with #) are ignored
+# Blank lines are ignored
+```
+
+**Tarball ID Extraction:**
+
+IDs are extracted from `manifest.json` inside the tarball with priority:
+1. PMCID (if present in manifest entry)
+2. DOI (if no PMCID)
+3. Filename parsing (fallback if no manifest or IDs)
+
+### Metrics Interpretation
+
+| Metric | Formula | Interpretation |
+|--------|---------|----------------|
+| **Jaccard** | \|A ∩ B\| / \|A ∪ B\| | Overall similarity (0-1), accounts for corpus size differences |
+| **Recall** | \|A ∩ B\| / \|Reference\| | Fraction of reference found in candidate |
+| **Precision** | \|A ∩ B\| / \|Candidate\| | Fraction of candidate that is in reference |
+
+**Typical auto vs expert comparison:**
+- High recall (~0.9) = Auto found most expert papers ✓
+- Low precision (~0.1) = Auto found many additional papers (expected for expansion)
+- Low Jaccard = Corpus sizes differ significantly
+
+### CLI Usage
+
+```bash
+# Basic comparison with JSON output
+text-fetch compare \
+  -r expert_corpus.txt \
+  -c auto_corpus.tar.gz \
+  -o comparison.json
+
+# Pretty-print to stdout
+text-fetch compare \
+  -r corpus_a.tar.gz \
+  -c corpus_b.tar.gz
+
+# With custom labels
+text-fetch compare \
+  -r snowball_d1.tar.gz \
+  -c snowball_d2.tar.gz \
+  --ref-label "Depth 1" \
+  --cand-label "Depth 2"
 ```
 
 ---

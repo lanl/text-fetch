@@ -54,6 +54,7 @@ def _register_commands() -> None:
         arxiv,
         biorxiv,
         chemrxiv,
+        compare,
         europepmc,
         fetch,
         medrxiv,
@@ -73,6 +74,7 @@ def _register_commands() -> None:
     cli.add_command(fetch.unified_fetch_cmd, name="fetch")
     cli.add_command(workspace.workspace)
     cli.add_command(tarball.tarball)
+    cli.add_command(compare.compare_cmd, name="compare")
 
 
 _register_commands()

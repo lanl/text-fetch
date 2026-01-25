@@ -1,6 +1,6 @@
 [project]
 name = "text-fetch"
-version = "0.3.0"
+version = "0.3.1"
 description = "A tool to fetch and convert PDF documents to JATS XML format"
 authors = [
     {name = "William S. Hlavacek", email = "hlavacek@lanl.gov"},

@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-01-25
+
+### Added
+- **Corpus Comparison** - Compare two corpora to measure overlap and evaluate coverage
+  - `text-fetch compare` command for corpus comparison
+  - `--reference` / `-r` option for reference corpus path
+  - `--candidate` / `-c` option for candidate corpus path
+  - `--out` / `-o` option for JSON output path (pretty-print to stdout if omitted)
+  - `--ref-label` option for custom reference corpus label
+  - `--cand-label` option for custom candidate corpus label
+  - `compare.py` module with corpus comparison functions
+  - `ComparisonResult` dataclass with computed metrics
+  - `compare_corpora()` function for comparing two corpora
+  - `detect_id_type()` function for auto-detecting ID types (PMCID, DOI, PMID)
+  - `normalize_id()` function for ID normalization
+  - `parse_id_list()` function for reading text ID lists
+  - `extract_ids_from_tarball()` function for extracting IDs from tarballs
+  - `load_corpus_ids()` function for loading IDs from any format
+
+### Input Formats
+- **text-fetch tarball (`.tar.gz`)** - Extracts IDs from `manifest.json`
+  - ID priority: PMCID > DOI > filename parsing
+- **Plain text ID list (`.txt`)** - One ID per line
+  - Comments with `#` ignored
+  - Blank lines ignored
+
+### ID Auto-Detection
+- `PMC*` (case-insensitive) → PMCID
+- Contains `/` → DOI
+- 7+ digits → PMID
+- Otherwise → Unknown (logged as warning)
+
+### Metrics
+- **Jaccard similarity** - |A ∩ B| / |A ∪ B| (overall similarity)
+- **Recall** - |A ∩ B| / |Reference| (fraction of reference found in candidate)
+- **Precision** - |A ∩ B| / |Candidate| (fraction of candidate in reference)
+- **Reference-only** - IDs in reference but not in candidate
+- **Candidate-only** - IDs in candidate but not in reference
+
+### JSON Output Format
+```json
+{
+  "metadata": {
+    "text_fetch_version": "0.3.1",
+    "timestamp": "2026-01-25T10:30:00Z",
+    "normalized": false
+  },
+  "reference": {
+    "label": "Expert (2024)",
+    "source": "expert_corpus.txt",
+    "count": 312,
+    "id_types": {"pmcid": 280, "doi": 30, "pmid": 2}
+  },
+  "candidate": {...},
+  "overlap": {
+    "count": 287,
+    "jaccard": 0.10,
+    "recall": 0.92,
+    "precision": 0.10
+  },
+  "reference_only": ["PMC111111", "PMC222222"],
+  "candidate_only": ["PMC333333", "PMC444444"]
+}
+```
+
+### CLI Examples
+```bash
+# Basic comparison
+text-fetch compare -r expert.txt -c auto_corpus.tar.gz -o result.json
+
+# Pretty-print to stdout
+text-fetch compare -r corpus_a.tar.gz -c corpus_b.tar.gz
+
+# With custom labels
+text-fetch compare -r old.tar.gz -c new.tar.gz \
+  --ref-label "Depth 1" --cand-label "Depth 2"
+```
+
+### Use Cases
+- **Validation** - Compare auto-generated corpus against expert curation
+- **Experimentation** - Compare corpora from different expansion methods
+- **Quality assurance** - Verify that important papers weren't missed
+
+### Tests
+- Added 46 new tests for corpus comparison (`test_compare.py`)
+- Tests for `detect_id_type()`, `normalize_id()`, `parse_id_list()`
+- Tests for `extract_ids_from_tarball()`, `load_corpus_ids()`
+- Tests for `compare_corpora()` and `ComparisonResult`
+- CLI integration tests for `text-fetch compare`
+- Total test count: 558 (all passing)
+
 ## [0.3.0] - 2026-01-25
 
 ### Added

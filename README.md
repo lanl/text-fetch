@@ -873,6 +873,89 @@ corpus.tar.gz
 └── *.xml                         # JATS files (flat structure)
 ```
 
+### Workflow 10: Corpus Comparison (v0.3.1)
+
+Compare two corpora to measure overlap and evaluate coverage:
+
+```bash
+# Basic comparison: auto-generated vs expert-curated corpus
+uv run text-fetch compare \
+  --reference expert_corpus.txt \
+  --candidate auto_corpus.tar.gz \
+  --out comparison.json
+
+# Pretty-print to stdout (no --out)
+uv run text-fetch compare \
+  --reference corpus_a.tar.gz \
+  --candidate corpus_b.tar.gz
+
+# With custom labels for display
+uv run text-fetch compare \
+  --reference snowball_d1.tar.gz \
+  --candidate snowball_d2.tar.gz \
+  --ref-label "Depth 1" \
+  --cand-label "Depth 2" \
+  --out comparison.json
+```
+
+**Input formats:**
+
+1. **text-fetch tarball (`.tar.gz`)** - Extracts IDs from `manifest.json`
+2. **Plain text ID list (`.txt`)** - One ID per line (comments with `#` ignored)
+
+```
+# corpus_ids.txt
+PMC123456
+PMC789012
+10.1016/j.cell.2020.01.001
+32847729
+```
+
+**Auto-detected ID types:**
+- `PMC*` → PMCID
+- Contains `/` → DOI
+- 7+ digits → PMID
+
+**Output metrics:**
+
+| Metric | Formula | Interpretation |
+|--------|---------|----------------|
+| **Jaccard** | \|A ∩ B\| / \|A ∪ B\| | Overall similarity (0-1) |
+| **Recall** | \|A ∩ B\| / \|Reference\| | Fraction of reference found in candidate |
+| **Precision** | \|A ∩ B\| / \|Candidate\| | Fraction of candidate in reference |
+
+**Example output:**
+```
+═══════════════════════════════════════════════════════════════════
+CORPUS COMPARISON
+═══════════════════════════════════════════════════════════════════
+
+REFERENCE: Expert (2024)
+  Source: expert_corpus.txt
+  Papers: 312
+
+CANDIDATE: Snowball d2
+  Source: auto_corpus.tar.gz
+  Papers: 2,847
+
+OVERLAP METRICS:
+  Common papers:  287
+  Jaccard:        0.10  (similarity)
+  Recall:         0.92  (candidate found 92% of reference)
+  Precision:      0.10  (10% of candidate is in reference)
+
+REFERENCE ONLY (25 papers not in candidate):
+  PMC111111, PMC222222, 10.1234/missed, ...
+
+CANDIDATE ONLY (2,560 papers not in reference):
+  PMC333333, PMC444444, ... (2,556 more)
+```
+
+**Use cases:**
+- **Validation:** Compare auto-generated corpus against expert curation
+- **Experimentation:** Compare corpora from different expansion methods
+- **Quality assurance:** Verify that important papers weren't missed
+
 ## Development
 
 ```bash
