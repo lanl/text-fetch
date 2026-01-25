@@ -347,9 +347,16 @@ def _handle_europepmc_expansion(
     if verbose:
         logger.info("Searching for seed papers: %s", query)
 
-    seeds: list[EuropePMCArticle] = list(
-        client.iter_search(query, max_results=max_results)
-    )
+    # Collect seeds - iter_search handles pagination and total discovery
+    # Show progress callback when we have results
+    seeds: list[EuropePMCArticle] = []
+    for i, article in enumerate(client.iter_search(query, max_results=max_results)):
+        seeds.append(article)
+        # Update progress every 25 articles (Europe PMC page size)
+        if progress_callback and (i % 25 == 0 or i == 0):
+            # Estimate expected - use max_results if set, otherwise show growing count
+            total_est = max_results if max_results else (i + 1) * 2
+            progress_callback("europepmc", f"search:{i}", i + 1, total_est)
 
     # Filter to papers with PMCIDs (downloadable)
     seeds_with_pmcid = [s for s in seeds if s.pmcid]
