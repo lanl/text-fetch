@@ -450,6 +450,10 @@ class SearchConfig:
     def to_europepmc_query(self) -> str:
         """Convert config to Europe PMC Lucene query syntax.
 
+        For multi-category searches (virus_keywords, disease_keywords, etc.),
+        groups keywords by category with AND between categories:
+        (virus_kw1 OR virus_kw2) AND (disease_kw1 OR ...) AND ...
+
         Returns:
             Europe PMC query string.
 
@@ -458,19 +462,49 @@ class SearchConfig:
             ...     author="hlavacek ws", keywords=["modeling"]
             ... )
             >>> config.to_europepmc_query()
-            'AUTH:"hlavacek ws" AND "modeling"'
+            'AUTH:"hlavacek ws" AND "modeling" AND OPEN_ACCESS:Y AND HAS_FT:Y'
         """
-        from .europepmc import EuropePMCClient
+        parts = []
 
-        kw = self.all_keywords if self.all_keywords else None
-        return EuropePMCClient.build_query(
-            author=self.author,
-            keywords=kw,
-            date_from=self._date_iso("start"),
-            date_to=self._date_iso("end"),
-            open_access_only=self.open_access_only,
-            has_full_text=True,
-        )
+        # Author
+        if self.author:
+            parts.append(f'AUTH:"{self.author}"')
+
+        # Handle keyword categories - group by category with AND between groups
+        # Each category uses OR within the group
+        categories = [
+            self.keywords,
+            self.virus_keywords,
+            self.disease_keywords,
+            self.vaccine_keywords,
+        ]
+
+        for cat_keywords in categories:
+            if cat_keywords:
+                # Quote each keyword and combine with OR
+                kw_parts = [f'"{kw}"' for kw in cat_keywords]
+                if len(kw_parts) == 1:
+                    parts.append(kw_parts[0])
+                else:
+                    parts.append(f"({' OR '.join(kw_parts)})")
+
+        # Date range
+        if self.date_range:
+            start = self._date_iso("start")
+            end = self._date_iso("end")
+            if start or end:
+                start = start or "*"
+                end = end or "*"
+                parts.append(f"FIRST_PDATE:[{start} TO {end}]")
+
+        # Open access filter
+        if self.open_access_only:
+            parts.append("OPEN_ACCESS:Y")
+
+        # Full text required
+        parts.append("HAS_FT:Y")
+
+        return " AND ".join(parts) if parts else "*"
 
     def to_biorxiv_params(self, server: str = "biorxiv") -> dict[str, Any]:
         """Convert config to bioRxiv/medRxiv fetch parameters.
