@@ -1153,19 +1153,18 @@ class TestExpandPapers:
 class TestFetchEuropepmc:
     """Tests for fetch_europepmc function."""
 
-    def test_mark_failed_called_on_fetch_none_med_source(
+    def test_mark_failed_called_on_fetch_none(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """mark_failed is called when get_full_text_xml returns None (MED source)."""
-        # Mock search to return one MED-source article with PMCID
-        # MED source uses Europe PMC download (not NCBI)
+        """mark_failed is called when NCBI returns None."""
+        # Mock search to return one article with PMCID
         search_response = {
             "hitCount": 1,
             "resultList": {
                 "result": [
                     {
                         "id": "12345",
-                        "source": "MED",  # MED source uses Europe PMC
+                        "source": "MED",
                         "pmcid": "PMC123456",
                         "title": "Test Article",
                         "isOpenAccess": "Y",
@@ -1178,9 +1177,9 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # Mock get_full_text_xml to return None (404)
+        # Mock NCBI efetch to return empty (simulates article not found)
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
             status_code=404,
         )
 
@@ -1188,6 +1187,7 @@ class TestFetchEuropepmc:
             query="test",
             output_dir=tmp_path,
             max_results=1,
+            email="test@example.com",  # Required for NCBI
         )
 
         assert stats["errors"] == 1
@@ -1202,18 +1202,18 @@ class TestFetchEuropepmc:
             failed_ids = [f["id"] for f in checkpoint_data.get("failed", [])]
             assert "PMC123456" in failed_ids
 
-    def test_checkpoint_contains_failed_ids_med_source(
+    def test_checkpoint_contains_failed_ids(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """Checkpoint records failed IDs when fetch fails (MED source)."""
-        # Mock search with MED source articles
+        """Checkpoint records failed IDs when fetch fails."""
+        # Mock search with articles
         search_response = {
             "hitCount": 2,
             "resultList": {
                 "result": [
                     {
                         "id": "1",
-                        "source": "MED",  # MED source uses Europe PMC
+                        "source": "MED",
                         "pmcid": "PMC111111",
                         "title": "Article 1",
                         "isOpenAccess": "Y",
@@ -1221,7 +1221,7 @@ class TestFetchEuropepmc:
                     },
                     {
                         "id": "2",
-                        "source": "MED",  # MED source uses Europe PMC
+                        "source": "MED",
                         "pmcid": "PMC222222",
                         "title": "Article 2",
                         "isOpenAccess": "Y",
@@ -1234,30 +1234,43 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # First article fails
+        # First article fails (404 = not found, no retry), second succeeds
+        # Use NCBI endpoint (all PMCID articles use NCBI)
+        valid_xml = """<?xml version="1.0"?>
+        <pmc-articleset>
+        <article>
+            <front>
+                <article-meta>
+                    <article-id pub-id-type="pmc">222222</article-id>
+                    <title-group><article-title>Article 2</article-title></title-group>
+                </article-meta>
+            </front>
+            <body><p>Test content.</p></body>
+        </article>
+        </pmc-articleset>"""
+        # Mock NCBI - first call fails (404), second succeeds
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111111/fullTextXML",
-            status_code=500,
-        )
-        # Second article succeeds
-        requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/222222/fullTextXML",
-            text="<article><body>Test content</body></article>",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            [
+                {"status_code": 404},  # First article fails (not found)
+                {"text": valid_xml},  # Second article succeeds
+            ],
         )
 
         stats = fetch_europepmc(
             query="test",
             output_dir=tmp_path,
             max_results=2,
+            email="test@example.com",  # Required for NCBI
         )
 
         assert stats["errors"] == 1
         assert stats["fetched"] == 1
 
-    def test_update_source_record_not_called_on_errors_med_source(
+    def test_update_source_record_not_called_on_errors(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """update_source_record not called when there are errors (MED source)."""
+        """update_source_record not called when there are errors."""
         from unittest.mock import patch
 
         from text_fetch.workspace import Workspace
@@ -1265,14 +1278,14 @@ class TestFetchEuropepmc:
         # Create workspace
         ws = Workspace.init(tmp_path / "corpus")
 
-        # Mock search to return one MED-source article
+        # Mock search to return one article
         search_response = {
             "hitCount": 1,
             "resultList": {
                 "result": [
                     {
                         "id": "12345",
-                        "source": "MED",  # MED source uses Europe PMC
+                        "source": "MED",
                         "pmcid": "PMC123456",
                         "title": "Test Article",
                         "isOpenAccess": "Y",
@@ -1285,9 +1298,9 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # Mock get_full_text_xml to fail
+        # Mock NCBI to fail
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
             status_code=500,
         )
 
@@ -1299,16 +1312,17 @@ class TestFetchEuropepmc:
                 query="test",
                 workspace=ws,
                 max_results=1,
+                email="test@example.com",  # Required for NCBI
             )
 
             assert stats["errors"] == 1
             # update_source_record should NOT have been called due to errors
             mock_update.assert_not_called()
 
-    def test_update_source_record_called_on_success_med_source(
+    def test_update_source_record_called_on_success(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """update_source_record called when no errors (MED source)."""
+        """update_source_record called when no errors."""
         from unittest.mock import patch
 
         from text_fetch.workspace import Workspace
@@ -1316,14 +1330,14 @@ class TestFetchEuropepmc:
         # Create workspace
         ws = Workspace.init(tmp_path / "corpus")
 
-        # Mock search to return one MED-source article
+        # Mock search to return one article
         search_response = {
             "hitCount": 1,
             "resultList": {
                 "result": [
                     {
                         "id": "12345",
-                        "source": "MED",  # MED source uses Europe PMC
+                        "source": "MED",
                         "pmcid": "PMC123456",
                         "title": "Test Article",
                         "isOpenAccess": "Y",
@@ -1336,21 +1350,23 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # Mock get_full_text_xml to succeed
+        # Mock NCBI to succeed
         valid_xml = """<?xml version="1.0"?>
+        <pmc-articleset>
         <article>
             <front>
                 <article-meta>
-                    <article-id pub-id-type="pmcid">PMC123456</article-id>
+                    <article-id pub-id-type="pmc">123456</article-id>
                     <title-group>
                         <article-title>Test Article Title</article-title>
                     </title-group>
                 </article-meta>
             </front>
             <body><p>Test content body.</p></body>
-        </article>"""
+        </article>
+        </pmc-articleset>"""
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
             text=valid_xml,
         )
 
@@ -1362,6 +1378,7 @@ class TestFetchEuropepmc:
                 query="test",
                 workspace=ws,
                 max_results=1,
+                email="test@example.com",  # Required for NCBI
             )
 
             assert stats["errors"] == 0
@@ -1461,16 +1478,16 @@ class TestFetchEuropepmc:
         assert stats["fetched"] == 0
         assert stats["errors"] == 0
 
-    def test_mixed_sources_hybrid_download(self, tmp_path: Path, requests_mock) -> None:
-        """Mixed sources use appropriate download backends."""
-        # Mock search to return both MED and PMC source articles
+    def test_all_pmcid_uses_ncbi(self, tmp_path: Path, requests_mock) -> None:
+        """All PMCID articles use NCBI for download (regardless of source)."""
+        # Mock search to return both MED and PMC source articles with PMCIDs
         search_response = {
             "hitCount": 2,
             "resultList": {
                 "result": [
                     {
                         "id": "1",
-                        "source": "MED",  # Uses Europe PMC
+                        "source": "MED",
                         "pmcid": "PMC111111",
                         "title": "MED Article",
                         "isOpenAccess": "Y",
@@ -1478,7 +1495,7 @@ class TestFetchEuropepmc:
                     },
                     {
                         "id": "2",
-                        "source": "PMC",  # Uses NCBI
+                        "source": "PMC",
                         "pmcid": "PMC222222",
                         "title": "PMC Article",
                         "isOpenAccess": "Y",
@@ -1491,25 +1508,22 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # Mock Europe PMC for MED source
-        med_xml = """<?xml version="1.0"?>
+        # Mock NCBI for BOTH articles (all PMCID articles use NCBI now)
+        xml1 = """<?xml version="1.0"?>
+        <pmc-articleset>
         <article>
             <front>
                 <article-meta>
-                    <article-id pub-id-type="pmcid">PMC111111</article-id>
+                    <article-id pub-id-type="pmc">111111</article-id>
                     <title-group>
                         <article-title>MED Article</article-title>
                     </title-group>
                 </article-meta>
             </front>
             <body><p>MED content.</p></body>
-        </article>"""
-        requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111111/fullTextXML",
-            text=med_xml,
-        )
-        # Mock NCBI for PMC source
-        pmc_xml = """<?xml version="1.0"?>
+        </article>
+        </pmc-articleset>"""
+        xml2 = """<?xml version="1.0"?>
         <pmc-articleset>
         <article>
             <front>
@@ -1525,7 +1539,7 @@ class TestFetchEuropepmc:
         </pmc-articleset>"""
         requests_mock.get(
             "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
-            text=pmc_xml,
+            [{"text": xml1}, {"text": xml2}],
         )
 
         stats = fetch_europepmc(

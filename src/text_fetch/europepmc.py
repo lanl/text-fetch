@@ -1077,12 +1077,13 @@ def fetch_europepmc(
     if verbose:
         logger.info("Found %d articles", len(articles))
 
-    # Filter for those with full-text in PMC
-    fetchable = [a for a in articles if a.pmcid and a.has_full_text]
+    # Filter for articles with PMCIDs - these can be downloaded from NCBI
+    # regardless of Europe PMC's has_full_text flag
+    fetchable = [a for a in articles if a.pmcid]
     stats["full_text_available"] = len(fetchable)
 
     if verbose:
-        logger.info("%d have full-text available", len(fetchable))
+        logger.info("%d have PMCIDs (downloadable from NCBI)", len(fetchable))
 
     if not fetchable:
         # Update workspace source record even if no results
@@ -1130,14 +1131,15 @@ def fetch_europepmc(
         )
         checkpoint.reset_save_tracking()
 
-    # Check if any PMC-source articles exist (require email for NCBI download)
-    pmc_source_articles = [a for a in fetchable if a.source == "PMC"]
-    if pmc_source_articles and not email:
+    # Check if we have email for NCBI downloads
+    # All articles with PMCIDs must be downloaded from NCBI
+    if fetchable and not email:
         logger.warning(
-            "Found %d PMC-source articles but no email provided. "
-            "PMC-source articles require NCBI API (--email). "
-            "These articles will be skipped.",
-            len(pmc_source_articles),
+            "Found %d articles with PMCIDs but no email provided. "
+            "PMCID articles require NCBI API (--email or NCBI_EMAIL env var "
+            "or ncbi.email in text-fetch.toml). "
+            "All articles will be skipped.",
+            len(fetchable),
         )
 
     # Create NCBI client if needed (lazy initialization)
@@ -1171,30 +1173,26 @@ def fetch_europepmc(
             continue
 
         try:
-            # Download full-text XML based on source
-            # PMC-source articles: Europe PMC doesn't host their full-text,
-            # so we must use NCBI's efetch API
-            if article.source == "PMC":
-                if not email:
-                    # Skip PMC-source articles if no email (already warned above)
-                    stats["skipped"] += 1
-                    checkpoint.mark_failed(
-                        article_pmcid,
-                        "PMC-source requires --email for NCBI download",
-                    )
-                    checkpoint.save_if_needed(checkpoint_path)
-                    continue
+            # Download full-text XML
+            # ALL articles with PMCIDs: download from NCBI (most reliable)
+            # Europe PMC may not have full-text for non-PMC-source articles
+            if not email:
+                # Skip all PMCID articles if no email
+                stats["skipped"] += 1
+                checkpoint.mark_failed(
+                    article_pmcid,
+                    "PMCID articles require --email for NCBI download",
+                )
+                checkpoint.save_if_needed(checkpoint_path)
+                continue
 
-                # Initialize NCBI client on first use
-                if ncbi_client is None:
-                    ncbi_client = NCBIClient(email=email, api_key=api_key)
-                    if verbose:
-                        logger.info("Using NCBI for PMC-source article downloads")
+            # Initialize NCBI client on first use
+            if ncbi_client is None:
+                ncbi_client = NCBIClient(email=email, api_key=api_key)
+                if verbose:
+                    logger.info("Using NCBI for full-text downloads")
 
-                xml_content = ncbi_client.fetch_pmc_xml(article_pmcid)
-            else:
-                # Non-PMC sources (MED, PPR, etc.): use Europe PMC directly
-                xml_content = client.get_full_text_xml(article_pmcid)
+            xml_content = ncbi_client.fetch_pmc_xml(article_pmcid)
 
             if xml_content is None:
                 stats["errors"] += 1
