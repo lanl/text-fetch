@@ -45,6 +45,44 @@ from ._common import handle_tarball_creation
     is_flag=True,
     help="Only fetch papers since last fetch (requires workspace)",
 )
+@click.option(
+    "--expand-references",
+    is_flag=True,
+    help="Expand by following references (papers seeds cite)",
+)
+@click.option(
+    "--expand-citations",
+    is_flag=True,
+    help="Expand by following citations (papers citing seeds)",
+)
+@click.option(
+    "--expand",
+    is_flag=True,
+    help="Expand both directions (--expand-references + --expand-citations)",
+)
+@click.option(
+    "--expansion-depth",
+    type=int,
+    default=1,
+    help="Expansion depth / hops (default: 1)",
+)
+@click.option(
+    "--max-expansion",
+    type=int,
+    default=0,
+    help="Max expanded papers (0=unlimited, default: 0)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Preview expansion stats, prompt before proceeding",
+)
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Auto-confirm dry-run prompt",
+)
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -62,6 +100,13 @@ def unified_fetch_cmd(
     no_dedupe: bool,
     resume: bool,
     update: bool,
+    expand_references: bool,
+    expand_citations: bool,
+    expand: bool,
+    expansion_depth: int,
+    max_expansion: int,
+    dry_run: bool,
+    yes: bool,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -93,6 +138,18 @@ def unified_fetch_cmd(
 
         # Update mode: fetch only new papers since last fetch
         text-fetch fetch --config-file search.json --workspace ./corpus --update
+
+        # Preview expansion (dry-run)
+        text-fetch fetch --config-file ebola.json --sources europepmc \\
+            --expand --dry-run --out ./output
+
+        # Fetch with citation expansion (europepmc only)
+        text-fetch fetch --config-file ebola.json --sources europepmc \\
+            --expand --out ./output
+
+        # Expand references only with depth 2
+        text-fetch fetch --config-file search.json --sources europepmc \\
+            --expand-references --expansion-depth 2 --out ./output
     """
     import contextlib
     import logging
@@ -173,6 +230,12 @@ def unified_fetch_cmd(
             "Set via --email, NCBI_EMAIL env var, or config file."
         )
 
+    # Resolve expansion flags
+    do_expand_refs = expand_references or expand
+    do_expand_cites = expand_citations or expand
+    has_expansion = do_expand_refs or do_expand_cites
+    effective_max_expansion = max_expansion if max_expansion > 0 else None
+
     # Show config summary
     click.echo(f"Config: {config_source}")
     click.echo(f"Sources: {', '.join(effective_sources)}")
@@ -181,6 +244,19 @@ def unified_fetch_cmd(
         click.echo(f"Workspace: {ws.path} (auto-deduplication)")
     else:
         click.echo(f"Deduplicate: {search_config.deduplicate_by_doi}")
+
+    # Show expansion settings if enabled
+    if has_expansion:
+        exp_dirs = []
+        if do_expand_refs:
+            exp_dirs.append("references")
+        if do_expand_cites:
+            exp_dirs.append("citations")
+        click.echo(f"Expansion: {' + '.join(exp_dirs)} (depth {expansion_depth})")
+        if effective_max_expansion:
+            click.echo(f"Max expansion: {effective_max_expansion}")
+        if dry_run:
+            click.echo("Mode: DRY-RUN (preview only)")
     click.echo()
 
     # Progress tracking
@@ -194,9 +270,14 @@ def unified_fetch_cmd(
             if progress_bar[0] is not None:
                 progress_bar[0].__exit__(None, None, None)
             current_source[0] = source
+            # Handle expansion progress labels
+            if article_id.startswith("expand:"):
+                label = f"Expanding {source}"
+            else:
+                label = f"Fetching {source}"
             progress_bar[0] = click.progressbar(
                 length=total,
-                label=f"Fetching {source}",
+                label=label,
                 show_pos=True,
                 show_percent=True,
             )
@@ -216,10 +297,45 @@ def unified_fetch_cmd(
             progress_callback=progress_callback,
             resume=resume,
             update=update,
+            expand_references=do_expand_refs,
+            expand_citations=do_expand_cites,
+            expansion_depth=expansion_depth,
+            max_expansion=effective_max_expansion,
+            dry_run=dry_run,
         )
     finally:
         if progress_bar[0] is not None:
             progress_bar[0].__exit__(None, None, None)
+
+    # Handle dry-run output
+    if stats.get("dry_run"):
+        _display_dry_run_report(stats)
+        if not yes and not click.confirm("\nContinue with fetch?"):
+            click.echo("Fetch cancelled.")
+            return
+        # Re-run without dry_run
+        click.echo("\nProceeding with fetch...")
+        try:
+            stats = unified_fetch(
+                config=search_config,
+                output_dir=out,
+                workspace=ws,
+                email=resolved_email,
+                api_key=resolved_api_key,
+                grobid_url=resolved_grobid,
+                verbose=verbose,
+                progress_callback=progress_callback,
+                resume=resume,
+                update=update,
+                expand_references=do_expand_refs,
+                expand_citations=do_expand_cites,
+                expansion_depth=expansion_depth,
+                max_expansion=effective_max_expansion,
+                dry_run=False,
+            )
+        finally:
+            if progress_bar[0] is not None:
+                progress_bar[0].__exit__(None, None, None)
 
     # Record search in workspace
     if ws:
@@ -275,3 +391,69 @@ def unified_fetch_cmd(
         click.echo(
             "Note: Use 'text-fetch workspace build' to create tarball " "from workspace"
         )
+
+
+def _display_dry_run_report(stats: dict) -> None:
+    """Display dry-run expansion report."""
+    click.echo("\n" + "=" * 60)
+    click.echo("EXPANSION DRY-RUN PREVIEW")
+    click.echo("=" * 60)
+
+    expansion = stats.get("expansion_result", {})
+    seed_stats = expansion.get("seed_stats", {})
+    seed_coverage = expansion.get("seed_coverage", {})
+    exp_stats = expansion.get("expansion_stats", {})
+    exp_config = expansion.get("expansion_config", {})
+
+    # Seed paper summary
+    click.echo("\nSEED PAPERS")
+    click.echo(f"  Query matched: {seed_stats.get('articles_found', 0):,}")
+    click.echo(f"  With PMCIDs (downloadable): {seed_stats.get('with_pmcid', 0):,}")
+
+    # Expansion configuration
+    click.echo("\nEXPANSION CONFIG")
+    if exp_config.get("expand_references"):
+        click.echo("  References: YES")
+    if exp_config.get("expand_citations"):
+        click.echo("  Citations: YES")
+    click.echo(f"  Depth: {exp_config.get('depth', 1)}")
+    max_exp = exp_config.get("max_expansion")
+    click.echo(f"  Max expansion: {max_exp if max_exp else 'unlimited'}")
+
+    # Seed coverage stats
+    click.echo("\nSEED COVERAGE")
+    total = seed_coverage.get("total_seeds", 0)
+    with_refs = seed_coverage.get("seeds_with_references", 0)
+    with_cites = seed_coverage.get("seeds_with_citations", 0)
+    ref_pct = seed_coverage.get("reference_coverage_pct", 0)
+    cite_pct = seed_coverage.get("citation_coverage_pct", 0)
+
+    click.echo(f"  Seeds with references: {with_refs}/{total} ({ref_pct}%)")
+    click.echo(f"  Seeds with citations: {with_cites}/{total} ({cite_pct}%)")
+
+    # Expansion results
+    click.echo("\nEXPANSION RESULTS")
+    refs_found = exp_stats.get("references_found", 0)
+    cites_found = exp_stats.get("citations_found", 0)
+    total_unique = exp_stats.get("total_unique", 0)
+    dupes = exp_stats.get("duplicates_skipped", 0)
+
+    click.echo(f"  References discovered: {refs_found:,}")
+    click.echo(f"  Citations discovered: {cites_found:,}")
+    click.echo(f"  Total unique expanded: {total_unique:,}")
+    click.echo(f"  Duplicates skipped: {dupes:,}")
+
+    # Layer breakdown
+    layers = expansion.get("layers", [])
+    if layers:
+        click.echo("\nLAYERS")
+        for layer in layers:
+            depth = layer.get("depth", 0)
+            ltype = layer.get("type", "unknown")
+            count = layer.get("count", 0)
+            if depth == 0:
+                click.echo(f"  Depth {depth} (seeds): {count:,}")
+            else:
+                click.echo(f"  Depth {depth} ({ltype}): {count:,}")
+
+    click.echo("\n" + "=" * 60)

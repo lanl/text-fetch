@@ -32,6 +32,11 @@ def unified_fetch(
     progress_callback: Callable[[str, str, int, int], None] | None = None,
     resume: bool = False,
     update: bool = False,
+    expand_references: bool = False,
+    expand_citations: bool = False,
+    expansion_depth: int = 1,
+    max_expansion: int | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Fetch articles from multiple sources using unified config.
 
@@ -46,9 +51,15 @@ def unified_fetch(
         progress_callback: Optional callback(source, id, current, total).
         resume: Resume from checkpoints for interrupted fetches.
         update: Only fetch papers since last fetch (requires workspace).
+        expand_references: Expand by following references (europepmc only).
+        expand_citations: Expand by following citations (europepmc only).
+        expansion_depth: Number of expansion hops (default: 1).
+        max_expansion: Cap on total expanded papers (None = unlimited).
+        dry_run: If True, return expansion preview without fetching.
 
     Returns:
         Statistics dict with per-source stats and deduplication info.
+        If dry_run=True, returns {"dry_run": True, "expansion_result": ...}.
     """
     # When workspace is used, deduplication is automatic via DOI index
     if workspace:
@@ -58,6 +69,19 @@ def unified_fetch(
         output_path.mkdir(parents=True, exist_ok=True)
 
     sources = config.sources or ["pmc"]  # Default to PMC
+
+    # Check for expansion on non-europepmc sources
+    has_expansion = expand_references or expand_citations
+    if has_expansion:
+        non_epmc = [s for s in sources if s != "europepmc"]
+        if non_epmc:
+            logger.warning(
+                "Citation expansion only supported for europepmc. "
+                "Expansion skipped for: %s",
+                ", ".join(non_epmc),
+            )
+        if "europepmc" not in sources:
+            logger.warning("No europepmc source - expansion options will be ignored.")
 
     # Overall stats
     stats: dict[str, Any] = {
@@ -70,9 +94,51 @@ def unified_fetch(
         "duplicates_removed": 0,
         "duplicates_skipped": 0,
         "unique_dois": [],
+        "expansion": None,  # Will be set if expansion is used
     }
 
-    # Fetch from each source
+    # Handle europepmc expansion (dry-run or full expansion)
+    if has_expansion and "europepmc" in sources:
+        expansion_result = _handle_europepmc_expansion(
+            config=config,
+            output_dir=output_path,
+            workspace=workspace,
+            email=email,
+            api_key=api_key,
+            expand_references=expand_references,
+            expand_citations=expand_citations,
+            expansion_depth=expansion_depth,
+            max_expansion=max_expansion,
+            dry_run=dry_run,
+            verbose=verbose,
+            progress_callback=progress_callback,
+        )
+
+        # In dry-run mode, return early with expansion preview
+        if dry_run:
+            return {
+                "dry_run": True,
+                "expansion_result": expansion_result,
+                "seed_stats": expansion_result.get("seed_stats", {}),
+            }
+
+        # Store expansion stats
+        stats["expansion"] = {
+            "expand_references": expand_references,
+            "expand_citations": expand_citations,
+            "expansion_depth": expansion_depth,
+            "seeds_fetched": expansion_result.get("seeds_fetched", 0),
+            "expanded_fetched": expansion_result.get("expanded_fetched", 0),
+            "total_unique": expansion_result.get("total_unique", 0),
+        }
+
+        # Add expansion stats to totals
+        stats["total_fetched"] += expansion_result.get("expanded_fetched", 0)
+        stats["total_valid"] += expansion_result.get("expanded_valid", 0)
+
+        return stats
+
+    # Non-expansion path: fetch from each source normally
     for source in sources:
         # When using workspace, all files go to workspace dirs
         # When not using workspace, create source subdirs
@@ -222,6 +288,184 @@ def _fetch_from_source(
 
     else:
         raise ValueError(f"Unknown source: {source}")
+
+
+def _handle_europepmc_expansion(
+    config: SearchConfig,
+    output_dir: Path,
+    workspace: Workspace | None,
+    email: str | None,
+    api_key: str | None,
+    expand_references: bool,
+    expand_citations: bool,
+    expansion_depth: int,
+    max_expansion: int | None,
+    dry_run: bool,
+    verbose: bool,
+    progress_callback: Callable[[str, str, int, int], None] | None,
+) -> dict[str, Any]:
+    """Handle Europe PMC fetch with citation/reference expansion.
+
+    This implements a two-phase fetch:
+    1. Fetch seed papers from the search query
+    2. Expand via citations/references to discover related papers
+
+    Args:
+        config: Search configuration.
+        output_dir: Output directory.
+        workspace: Optional workspace.
+        email: NCBI email for PMC downloads.
+        api_key: NCBI API key.
+        expand_references: Expand by following references.
+        expand_citations: Expand by following citations.
+        expansion_depth: Number of hops.
+        max_expansion: Cap on expanded papers.
+        dry_run: If True, return preview without fetching.
+        verbose: Verbose logging.
+        progress_callback: Progress callback.
+
+    Returns:
+        Dictionary with expansion statistics.
+    """
+    from .europepmc import (
+        EuropePMCArticle,
+        EuropePMCClient,
+        expand_papers,
+        fetch_europepmc,
+    )
+
+    client = EuropePMCClient()
+    query = config.to_europepmc_query()
+
+    # Get source-specific max_results
+    opts = config.source_options.get("europepmc")
+    max_results = (
+        opts.max_results if opts and opts.max_results else config.max_results_per_source
+    )
+
+    # Phase 1: Search for seed papers (metadata only, don't download yet)
+    if verbose:
+        logger.info("Searching for seed papers: %s", query)
+
+    seeds: list[EuropePMCArticle] = list(
+        client.iter_search(query, max_results=max_results)
+    )
+
+    # Filter to papers with PMCIDs (downloadable)
+    seeds_with_pmcid = [s for s in seeds if s.pmcid]
+
+    seed_stats = {
+        "query": query,
+        "articles_found": len(seeds),
+        "with_pmcid": len(seeds_with_pmcid),
+    }
+
+    if verbose:
+        logger.info(
+            "Found %d seeds, %d with PMCIDs",
+            len(seeds),
+            len(seeds_with_pmcid),
+        )
+
+    # Phase 2: Expand via citations/references
+    if verbose:
+        logger.info(
+            "Expanding: refs=%s, cites=%s, depth=%d",
+            expand_references,
+            expand_citations,
+            expansion_depth,
+        )
+
+    # Wrap progress callback for expansion
+    def expansion_progress(stage: str, current: int, total: int) -> None:
+        if progress_callback:
+            progress_callback("europepmc", f"expand:{stage}", current, total)
+
+    expansion_result = expand_papers(
+        client=client,
+        seeds=seeds_with_pmcid,
+        expand_references=expand_references,
+        expand_citations=expand_citations,
+        depth=expansion_depth,
+        max_expansion=max_expansion,
+        progress_callback=expansion_progress,
+    )
+
+    # Build dry-run result
+    if dry_run:
+        return {
+            "seed_stats": seed_stats,
+            "expansion_config": {
+                "expand_references": expand_references,
+                "expand_citations": expand_citations,
+                "depth": expansion_depth,
+                "max_expansion": max_expansion,
+            },
+            "seed_coverage": expansion_result.seed_coverage,
+            "expansion_stats": expansion_result.expansion_stats,
+            "layers": expansion_result.layers,
+        }
+
+    # Phase 3: Fetch seed papers
+    if verbose:
+        logger.info("Fetching %d seed papers...", len(seeds_with_pmcid))
+
+    seed_pmcids = [s.pmcid for s in seeds_with_pmcid if s.pmcid]
+
+    seed_fetch_stats = fetch_europepmc(
+        pmcids=seed_pmcids,
+        output_dir=output_dir,
+        workspace=workspace,
+        verbose=verbose,
+        progress_callback=_wrap_callback(progress_callback, "europepmc"),
+        email=email,
+        api_key=api_key,
+    )
+
+    # Phase 4: Fetch expanded papers
+    expanded_pmcids: list[str] = []
+    for papers in expansion_result.expanded_papers.values():
+        for paper in papers:
+            pmcid = paper.get("pmcid")
+            if pmcid:
+                # Normalize PMCID
+                if not str(pmcid).upper().startswith("PMC"):
+                    pmcid = f"PMC{pmcid}"
+                expanded_pmcids.append(pmcid)
+
+    # Remove duplicates while preserving order
+    seen: set[str] = set(seed_pmcids)
+    unique_expanded: list[str] = []
+    for pmcid in expanded_pmcids:
+        if pmcid not in seen:
+            seen.add(pmcid)
+            unique_expanded.append(pmcid)
+
+    if verbose:
+        logger.info("Fetching %d expanded papers...", len(unique_expanded))
+
+    expanded_fetch_stats: dict[str, Any] = {"fetched": 0, "valid": 0}
+    if unique_expanded:
+        expanded_fetch_stats = fetch_europepmc(
+            pmcids=unique_expanded,
+            output_dir=output_dir,
+            workspace=workspace,
+            verbose=verbose,
+            progress_callback=_wrap_callback(progress_callback, "europepmc"),
+            email=email,
+            api_key=api_key,
+        )
+
+    return {
+        "seed_stats": seed_stats,
+        "seeds_fetched": seed_fetch_stats.get("fetched", 0),
+        "seeds_valid": seed_fetch_stats.get("valid", 0),
+        "expanded_fetched": expanded_fetch_stats.get("fetched", 0),
+        "expanded_valid": expanded_fetch_stats.get("valid", 0),
+        "total_unique": len(seed_pmcids) + len(unique_expanded),
+        "expansion_stats": expansion_result.expansion_stats,
+        "seed_coverage": expansion_result.seed_coverage,
+    }
 
 
 def _wrap_callback(

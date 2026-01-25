@@ -571,7 +571,8 @@ class TestEuropepmcFetchCommand:
             )
 
         assert result.exit_code == 0
-        assert "Fetch complete" in result.output
+        # The europepmc CLI now shows detailed output format
+        assert "SEED PAPERS" in result.output or "Fetch complete" in result.output
 
 
 class TestArxivFetchCommand:

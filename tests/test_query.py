@@ -233,6 +233,74 @@ class TestSearchConfigFromJson:
         assert restored.date_range.start == original.date_range.start
 
 
+class TestSearchConfigExpansion:
+    """Tests for SearchConfig expansion fields."""
+
+    def test_expansion_defaults(self):
+        """Should have expansion defaults."""
+        config = SearchConfig(author="test")
+        assert config.expand_references is False
+        assert config.expand_citations is False
+        assert config.expansion_depth == 1
+        assert config.max_expansion is None
+
+    def test_from_dict_with_expansion(self):
+        """Should parse expansion fields from dict."""
+        data = {
+            "author": "test",
+            "expand_references": True,
+            "expand_citations": True,
+            "expansion_depth": 2,
+            "max_expansion": 500,
+        }
+        config = SearchConfig.from_dict(data)
+        assert config.expand_references is True
+        assert config.expand_citations is True
+        assert config.expansion_depth == 2
+        assert config.max_expansion == 500
+
+    def test_to_dict_excludes_default_expansion(self):
+        """Should not include default expansion values."""
+        config = SearchConfig(author="test")
+        data = config.to_dict()
+        assert "expand_references" not in data
+        assert "expand_citations" not in data
+        assert "expansion_depth" not in data
+        assert "max_expansion" not in data
+
+    def test_to_dict_includes_non_default_expansion(self):
+        """Should include non-default expansion values."""
+        config = SearchConfig(
+            author="test",
+            expand_references=True,
+            expand_citations=True,
+            expansion_depth=3,
+            max_expansion=1000,
+        )
+        data = config.to_dict()
+        assert data["expand_references"] is True
+        assert data["expand_citations"] is True
+        assert data["expansion_depth"] == 3
+        assert data["max_expansion"] == 1000
+
+    def test_expansion_roundtrip(self):
+        """Should serialize and deserialize expansion correctly."""
+        original = SearchConfig(
+            author="test",
+            expand_references=True,
+            expand_citations=False,
+            expansion_depth=2,
+            max_expansion=100,
+        )
+        data = original.to_dict()
+        restored = SearchConfig.from_dict(data)
+
+        assert restored.expand_references == original.expand_references
+        assert restored.expand_citations == original.expand_citations
+        assert restored.expansion_depth == original.expansion_depth
+        assert restored.max_expansion == original.max_expansion
+
+
 class TestEbolaJsonIntegration:
     """Integration tests with actual ebola.json file."""
 

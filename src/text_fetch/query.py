@@ -157,6 +157,12 @@ class SearchConfig:
     open_access_only: bool = True
     deduplicate_by_doi: bool = True
 
+    # Expansion configuration (europepmc only)
+    expand_references: bool = False
+    expand_citations: bool = False
+    expansion_depth: int = 1
+    max_expansion: int | None = None
+
     # Source file path (for error messages)
     source_path: str | None = None
 
@@ -224,6 +230,10 @@ class SearchConfig:
             max_results_per_source=data.get("max_results_per_source", 100),
             open_access_only=data.get("open_access_only", True),
             deduplicate_by_doi=data.get("deduplicate_by_doi", True),
+            expand_references=data.get("expand_references", False),
+            expand_citations=data.get("expand_citations", False),
+            expansion_depth=data.get("expansion_depth", 1),
+            max_expansion=data.get("max_expansion"),
             source_path=source_path,
         )
 
@@ -264,6 +274,15 @@ class SearchConfig:
             result["open_access_only"] = self.open_access_only
         if not self.deduplicate_by_doi:
             result["deduplicate_by_doi"] = self.deduplicate_by_doi
+        # Expansion configuration (only include if non-default)
+        if self.expand_references:
+            result["expand_references"] = self.expand_references
+        if self.expand_citations:
+            result["expand_citations"] = self.expand_citations
+        if self.expansion_depth != 1:
+            result["expansion_depth"] = self.expansion_depth
+        if self.max_expansion is not None:
+            result["max_expansion"] = self.max_expansion
         return result
 
     @property
