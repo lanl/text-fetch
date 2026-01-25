@@ -347,16 +347,48 @@ def _handle_europepmc_expansion(
     if verbose:
         logger.info("Searching for seed papers: %s", query)
 
-    # Collect seeds - iter_search handles pagination and total discovery
-    # Show progress callback when we have results
+    # First API call to get total count (hitCount)
+    first_batch, next_cursor, total_from_api = client.search(query)
+
+    # Effective total - capped by max_results if set
+    effective_total = (
+        min(total_from_api, max_results) if max_results else total_from_api
+    )
+
+    if verbose:
+        logger.info("Europe PMC reports %d matching articles", total_from_api)
+        if max_results and total_from_api > max_results:
+            logger.info("Limiting to %d (--max-results)", max_results)
+
+    # Collect all seeds with proper progress
     seeds: list[EuropePMCArticle] = []
-    for i, article in enumerate(client.iter_search(query, max_results=max_results)):
+
+    # Add first batch
+    for article in first_batch:
+        if max_results and len(seeds) >= max_results:
+            break
         seeds.append(article)
-        # Update progress every 25 articles (Europe PMC page size)
-        if progress_callback and (i % 25 == 0 or i == 0):
-            # When max_results is set, use it; otherwise use current + buffer
-            total_est = max_results if max_results else max(i + 100, 100)
-            progress_callback("europepmc", f"search:{i}", i + 1, total_est)
+
+    # Report progress for first batch
+    if progress_callback:
+        progress_callback(
+            "europepmc", f"search:{len(seeds)}", len(seeds), effective_total
+        )
+
+    # Continue pagination if needed
+    cursor = next_cursor
+    while cursor and (not max_results or len(seeds) < max_results):
+        batch, cursor, _ = client.search(query, cursor=cursor)
+        for article in batch:
+            if max_results and len(seeds) >= max_results:
+                break
+            seeds.append(article)
+
+        # Report progress
+        if progress_callback:
+            progress_callback(
+                "europepmc", f"search:{len(seeds)}", len(seeds), effective_total
+            )
 
     # Filter to papers with PMCIDs (downloadable)
     seeds_with_pmcid = [s for s in seeds if s.pmcid]

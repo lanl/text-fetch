@@ -299,15 +299,14 @@ def unified_fetch_cmd(
         else:
             phase = "fetch"
 
-        # For search phase, use simple text output (no progress bar)
-        # because we don't know the total until done
+        # For search phase, use simple text output with clear labeling
         if phase == "search":
-            # Only update if count changed significantly
-            if current > last_search_count[0]:
+            # Only update if count changed
+            if current != last_search_count[0]:
                 last_search_count[0] = current
                 # Overwrite the same line with \r
                 click.echo(
-                    f"\rSearching {source}... {current:,} articles found (of ~{total:,})",
+                    f"\rRetrieving {source} metadata: {current:,} / {total:,}",
                     nl=False,
                 )
             return
