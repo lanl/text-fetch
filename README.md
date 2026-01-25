@@ -835,12 +835,27 @@ output/
 - `expansion_stats` - Total found, duplicates skipped
 - `layers` - Papers at each expansion depth
 
+**Important: PMC-source articles don't have citation data**
+
+When using `--expand`, avoid filtering by `SRC:PMC`. Europe PMC's citation graph primarily indexes PubMed (MED-source) articles, not PMC-source articles:
+
+```bash
+# ❌ This returns 0 citations/references (PMC-source has no citation data):
+uv run text-fetch europepmc fetch --query 'ebolavirus SRC:PMC' --expand --out ./output
+
+# ✅ This works (MED-source articles have citation data):
+uv run text-fetch europepmc fetch --query 'ebolavirus' --expand --out ./output
+```
+
+MED-source articles often have PMCIDs and can still be downloaded from NCBI - they just weren't submitted directly to PMC.
+
 **Example: Ebola Vaccine Corpus**
 
 Build a comprehensive corpus of Ebola vaccine literature (last 5 years) plus all cited and citing papers:
 
 ```bash
 # First, preview expansion stats (dry-run)
+# Note: no SRC:PMC filter - let Europe PMC return MED-source articles
 uv run text-fetch europepmc fetch \
   --query '(ebolavirus OR "ebola virus" OR filovirus OR marburg) AND (vaccine OR vaccination OR "clinical trial") AND FIRST_PDATE:[2021-01-01 TO 2026-01-25]' \
   --expand \
