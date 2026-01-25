@@ -364,6 +364,51 @@ class EuropePMCClient:
         articles, _, _ = self.search(query, page_size=1)
         return articles[0] if articles else None
 
+    def batch_lookup_pmids(
+        self,
+        pmids: list[str],
+        batch_size: int = 50,
+    ) -> dict[str, EuropePMCArticle]:
+        """Look up multiple PMIDs in batches.
+
+        Uses Europe PMC's multi-ID search: EXT_ID:(id1 OR id2 OR ...)
+        This is ~10× faster than individual lookups for large lists.
+
+        Args:
+            pmids: List of PMID strings (without prefix).
+            batch_size: Number of IDs per API call (max ~100 recommended).
+
+        Returns:
+            Dict mapping PMID → EuropePMCArticle (only for found articles).
+
+        Example:
+            >>> client = EuropePMCClient()
+            >>> results = client.batch_lookup_pmids(["12345678", "23456789"])
+            >>> for pmid, article in results.items():
+            ...     print(f"{pmid}: {article.pmcid}")
+        """
+        if not pmids:
+            return {}
+
+        # Remove duplicates while preserving order
+        unique_pmids = list(dict.fromkeys(pmids))
+
+        results: dict[str, EuropePMCArticle] = {}
+
+        for i in range(0, len(unique_pmids), batch_size):
+            batch = unique_pmids[i : i + batch_size]
+
+            # Build query: EXT_ID:(pmid1 OR pmid2 OR ...) AND SRC:MED
+            id_clause = " OR ".join(batch)
+            query = f"EXT_ID:({id_clause}) AND SRC:MED"
+
+            # Search and collect results
+            for article in self.iter_search(query, max_results=len(batch)):
+                if article.pmid:
+                    results[article.pmid] = article
+
+        return results
+
     def get_by_doi(self, doi: str) -> EuropePMCArticle | None:
         """Fetch article metadata by DOI.
 

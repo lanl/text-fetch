@@ -845,6 +845,235 @@ class TestEuropePMCClient:
         assert len(references) == 5
 
 
+class TestBatchLookup:
+    """Tests for batch_lookup_pmids method."""
+
+    def test_batch_lookup_empty_list(self) -> None:
+        """batch_lookup_pmids returns empty dict for empty input."""
+        client = EuropePMCClient()
+        result = client.batch_lookup_pmids([])
+        assert result == {}
+
+    def test_batch_lookup_returns_dict(self, requests_mock) -> None:
+        """batch_lookup_pmids returns dict mapping PMID → article."""
+        response = {
+            "hitCount": 2,
+            "nextCursorMark": "*",
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345678",
+                        "source": "MED",
+                        "pmid": "12345678",
+                        "pmcid": "PMC9876543",
+                        "title": "Article 1",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                    {
+                        "id": "23456789",
+                        "source": "MED",
+                        "pmid": "23456789",
+                        "pmcid": "PMC8765432",
+                        "title": "Article 2",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        result = client.batch_lookup_pmids(["12345678", "23456789"])
+
+        assert len(result) == 2
+        assert "12345678" in result
+        assert "23456789" in result
+        assert result["12345678"].pmcid == "PMC9876543"
+        assert result["23456789"].pmcid == "PMC8765432"
+
+    def test_batch_lookup_handles_missing_pmids(self, requests_mock) -> None:
+        """PMIDs not found in Europe PMC are not in result dict."""
+        response = {
+            "hitCount": 1,
+            "nextCursorMark": "*",
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345678",
+                        "source": "MED",
+                        "pmid": "12345678",
+                        "pmcid": "PMC9876543",
+                        "title": "Found Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        # Request 3 PMIDs, but only 1 is found
+        result = client.batch_lookup_pmids(["12345678", "99999999", "88888888"])
+
+        assert len(result) == 1
+        assert "12345678" in result
+        assert "99999999" not in result
+        assert "88888888" not in result
+
+    def test_batch_lookup_handles_duplicates(self, requests_mock) -> None:
+        """Duplicate PMIDs in input are handled correctly."""
+        response = {
+            "hitCount": 1,
+            "nextCursorMark": "*",
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345678",
+                        "source": "MED",
+                        "pmid": "12345678",
+                        "pmcid": "PMC9876543",
+                        "title": "Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        # Same PMID repeated multiple times
+        result = client.batch_lookup_pmids(["12345678", "12345678", "12345678"])
+
+        # Should still only have one entry
+        assert len(result) == 1
+        assert "12345678" in result
+
+    def test_batch_lookup_respects_batch_size(self, requests_mock) -> None:
+        """Large lists are split into batches."""
+        # Response for batch 1 (PMIDs 1-3)
+        response1 = {
+            "hitCount": 3,
+            "nextCursorMark": "*",
+            "resultList": {
+                "result": [
+                    {
+                        "id": str(i),
+                        "source": "MED",
+                        "pmid": str(i),
+                        "pmcid": f"PMC{i}00",
+                        "title": f"Article {i}",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                    for i in range(1, 4)
+                ]
+            },
+        }
+        # Response for batch 2 (PMIDs 4-5)
+        response2 = {
+            "hitCount": 2,
+            "nextCursorMark": "*",
+            "resultList": {
+                "result": [
+                    {
+                        "id": str(i),
+                        "source": "MED",
+                        "pmid": str(i),
+                        "pmcid": f"PMC{i}00",
+                        "title": f"Article {i}",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                    for i in range(4, 6)
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            [{"json": response1}, {"json": response2}],
+        )
+
+        client = EuropePMCClient()
+        # 5 PMIDs with batch_size=3 → 2 batches
+        result = client.batch_lookup_pmids(["1", "2", "3", "4", "5"], batch_size=3)
+
+        assert len(result) == 5
+        for i in range(1, 6):
+            assert str(i) in result
+            assert result[str(i)].pmcid == f"PMC{i}00"
+
+    def test_batch_lookup_query_format(self, requests_mock) -> None:
+        """Verify the query format used for batch lookup."""
+        response = {
+            "hitCount": 0,
+            "nextCursorMark": "*",
+            "resultList": {"result": []},
+        }
+        adapter = requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        client.batch_lookup_pmids(["111", "222", "333"])
+
+        # Check that the query was formatted correctly
+        # Note: URL query params are lowercased in requests_mock
+        assert adapter.call_count == 1
+        query_param = adapter.last_request.qs.get("query", [""])[0].lower()
+        assert "ext_id:" in query_param
+        assert "111" in query_param
+        assert "222" in query_param
+        assert "333" in query_param
+        assert " or " in query_param
+        assert "src:med" in query_param
+
+    def test_batch_lookup_articles_without_pmcid(self, requests_mock) -> None:
+        """Articles without PMCID are still returned in result."""
+        response = {
+            "hitCount": 1,
+            "nextCursorMark": "*",
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345678",
+                        "source": "MED",
+                        "pmid": "12345678",
+                        # No pmcid field
+                        "title": "Article without PMCID",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "N",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=response,
+        )
+
+        client = EuropePMCClient()
+        result = client.batch_lookup_pmids(["12345678"])
+
+        # Article should be returned even without PMCID
+        assert len(result) == 1
+        assert "12345678" in result
+        assert result["12345678"].pmcid is None
+
+
 class TestExpandPapers:
     """Tests for expand_papers function."""
 

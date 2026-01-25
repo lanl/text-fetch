@@ -438,6 +438,7 @@ def europepmc_fetch(
                 timing["expansion"] = time.monotonic() - t_start
 
                 # Look up PMCIDs with tracking by type
+                # Use batch lookup for ~10× speedup
                 t_lookup_start = time.monotonic()
                 click.echo("\nLooking up PMCIDs...")
                 ref_pmcids: list[str] = []
@@ -445,47 +446,85 @@ def europepmc_fetch(
                 refs_no_pmcid = 0
                 cites_no_pmcid = 0
 
+                # First pass: Collect PMIDs needing lookup and papers with PMCIDs
+                pmids_to_lookup: list[str] = []
+                pmid_to_paper_info: dict[str, list[dict]] = {}
+
                 for papers in expansion_result.expanded_papers.values():
                     for paper in papers:
                         exp_type = paper.get("_expansion_type", "")
-                        pmcid_found = None
-
-                        # First check if PMCID already present
                         raw_pmcid = paper.get("pmcid")
+
                         if raw_pmcid:
+                            # PMCID already present - normalize and track
                             pmcid_norm = str(raw_pmcid).upper()
                             if not pmcid_norm.startswith("PMC"):
                                 pmcid_norm = f"PMC{pmcid_norm}"
-                            pmcid_found = pmcid_norm
+                            if exp_type == "references":
+                                ref_pmcids.append(pmcid_norm)
+                            elif exp_type == "citations":
+                                cite_pmcids.append(pmcid_norm)
+                            else:
+                                ref_pmcids.append(pmcid_norm)
                         else:
-                            # Need to look up the paper to find PMCID
+                            # Need to look up PMCID
                             source = paper.get("source", "")
                             paper_id = paper.get("id")
                             if source == "MED" and paper_id:
-                                article = client.get_by_pmid(str(paper_id))
-                                if article and article.pmcid:
-                                    pmcid_found = article.pmcid
+                                # Collect for batch lookup
+                                pmid = str(paper_id)
+                                pmids_to_lookup.append(pmid)
+                                if pmid not in pmid_to_paper_info:
+                                    pmid_to_paper_info[pmid] = []
+                                pmid_to_paper_info[pmid].append({"exp_type": exp_type})
                             elif source == "PMC" and paper_id:
+                                # PMC source - ID is PMCID
                                 pmcid_norm = str(paper_id).upper()
                                 if not pmcid_norm.startswith("PMC"):
                                     pmcid_norm = f"PMC{pmcid_norm}"
-                                pmcid_found = pmcid_norm
+                                if exp_type == "references":
+                                    ref_pmcids.append(pmcid_norm)
+                                elif exp_type == "citations":
+                                    cite_pmcids.append(pmcid_norm)
+                                else:
+                                    ref_pmcids.append(pmcid_norm)
+                            else:
+                                # No usable ID - count as no PMCID
+                                if exp_type == "references":
+                                    refs_no_pmcid += 1
+                                elif exp_type == "citations":
+                                    cites_no_pmcid += 1
+                                else:
+                                    refs_no_pmcid += 1
 
-                        # Track by type
-                        if pmcid_found:
-                            if exp_type == "references":
-                                ref_pmcids.append(pmcid_found)
-                            elif exp_type == "citations":
-                                cite_pmcids.append(pmcid_found)
-                            else:
-                                ref_pmcids.append(pmcid_found)  # default
+                # Batch lookup for MED papers (the slow part - now fast!)
+                if pmids_to_lookup:
+                    click.echo(f"  Batch looking up {len(pmids_to_lookup)} PMIDs...")
+                    pmid_to_article = client.batch_lookup_pmids(pmids_to_lookup)
+
+                    # Map results back
+                    for pmid, paper_infos in pmid_to_paper_info.items():
+                        article = pmid_to_article.get(pmid)
+                        if article and article.pmcid:
+                            pmcid_found = article.pmcid
+                            for info in paper_infos:
+                                exp_type = info["exp_type"]
+                                if exp_type == "references":
+                                    ref_pmcids.append(pmcid_found)
+                                elif exp_type == "citations":
+                                    cite_pmcids.append(pmcid_found)
+                                else:
+                                    ref_pmcids.append(pmcid_found)
                         else:
-                            if exp_type == "references":
-                                refs_no_pmcid += 1
-                            elif exp_type == "citations":
-                                cites_no_pmcid += 1
-                            else:
-                                refs_no_pmcid += 1
+                            # PMID not found or no PMCID
+                            for info in paper_infos:
+                                exp_type = info["exp_type"]
+                                if exp_type == "references":
+                                    refs_no_pmcid += 1
+                                elif exp_type == "citations":
+                                    cites_no_pmcid += 1
+                                else:
+                                    refs_no_pmcid += 1
 
                 timing["lookup"] = time.monotonic() - t_lookup_start
 
