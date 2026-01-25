@@ -180,6 +180,7 @@ def europepmc_fetch(
     import logging
     import sys
 
+    from ..config import get_ncbi_api_key, get_setting, load_config
     from ..europepmc import (
         EuropePMCClient,
         expand_papers,
@@ -193,6 +194,13 @@ def europepmc_fetch(
 
     if verbose:
         logging.basicConfig(level=logging.DEBUG)
+
+    # Load config from text-fetch.toml and resolve email/api_key
+    config = load_config()
+    # get_ncbi_email() raises if no email, but we only want to raise if PMC articles
+    # are found. So use get_setting directly for optional resolution.
+    resolved_email = get_setting("ncbi.email", cli_value=email, config=config)
+    resolved_api_key = get_ncbi_api_key(cli_value=api_key, config=config)
 
     # Resolve expansion flags
     do_expand_refs = expand_references or expand
@@ -241,8 +249,8 @@ def europepmc_fetch(
             progress_callback=progress_callback,
             resume=resume,
             update=update,
-            email=email,
-            api_key=api_key,
+            email=resolved_email,
+            api_key=resolved_api_key,
         )
     finally:
         if progress_bar is not None:
@@ -408,8 +416,8 @@ def europepmc_fetch(
                             open_access_only=not include_non_oa,
                             verbose=verbose,
                             progress_callback=exp_progress_cb,
-                            email=email,
-                            api_key=api_key,
+                            email=resolved_email,
+                            api_key=resolved_api_key,
                         )
                     finally:
                         if exp_progress_bar is not None:
