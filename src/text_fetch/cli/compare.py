@@ -44,12 +44,25 @@ from text_fetch.compare import ComparisonResult, compare_corpora
     default=None,
     help="Label for candidate corpus",
 )
+@click.option(
+    "--normalize",
+    is_flag=True,
+    help="Normalize IDs via Europe PMC lookup (DOI/PMID→PMCID)",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Verbose output (shows normalization progress)",
+)
 def compare_cmd(
     reference: Path,
     candidate: Path,
     out: Path | None,
     ref_label: str | None,
     cand_label: str | None,
+    normalize: bool,
+    verbose: bool,
 ) -> None:
     """Compare two corpora and compute overlap metrics.
 
@@ -67,12 +80,24 @@ def compare_cmd(
         # With custom labels
         text-fetch compare -r old.tar.gz -c new.tar.gz \\
             --ref-label "Depth 1" --cand-label "Depth 2"
+
+        # With ID normalization (slower but more accurate for mixed IDs)
+        text-fetch compare -r expert.txt -c auto_corpus.tar.gz --normalize
     """
+    import logging
+
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+
+    if normalize:
+        click.echo("Normalizing IDs via Europe PMC (this may take a while)...")
+
     result = compare_corpora(
         reference_path=reference,
         candidate_path=candidate,
         reference_label=ref_label,
         candidate_label=cand_label,
+        normalize=normalize,
     )
 
     if out:

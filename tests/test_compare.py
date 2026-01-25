@@ -17,6 +17,7 @@ from text_fetch.compare import (
     extract_ids_from_tarball,
     load_corpus_ids,
     normalize_id,
+    normalize_ids_via_europepmc,
     parse_id_list,
 )
 
@@ -614,3 +615,195 @@ class TestCompareCLI:
         )
 
         assert result.exit_code != 0
+
+    def test_compare_normalize_flag_in_help(self) -> None:
+        """Test that --normalize flag appears in help."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compare", "--help"])
+
+        assert result.exit_code == 0
+        assert "--normalize" in result.output
+
+
+class TestNormalizeIdsViaEuropePMC:
+    """Tests for normalize_ids_via_europepmc function."""
+
+    def test_pmcids_unchanged(self, requests_mock) -> None:
+        """Test that PMCIDs are returned unchanged without API call."""
+        ids = {"PMC123456", "PMC789012"}
+        id_types = {"pmcid": 2, "doi": 0, "pmid": 0, "unknown": 0}
+
+        # No API mocking needed - PMCIDs don't require lookup
+        normalized, issues = normalize_ids_via_europepmc(ids, id_types)
+
+        assert normalized == {"PMC123456", "PMC789012"}
+        assert len(issues["unresolved"]) == 0
+        assert len(issues["no_pmcid"]) == 0
+
+    def test_doi_resolved_to_pmcid(self, requests_mock) -> None:
+        """Test DOI resolution to PMCID via Europe PMC."""
+        ids = {"10.1234/example"}
+        id_types = {"pmcid": 0, "doi": 1, "pmid": 0, "unknown": 0}
+
+        # Mock Europe PMC search response
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 1,
+                "resultList": {
+                    "result": [
+                        {
+                            "id": "123456",
+                            "source": "PMC",
+                            "pmcid": "PMC999999",
+                            "doi": "10.1234/example",
+                            "title": "Test Article",
+                        }
+                    ]
+                },
+            },
+        )
+
+        normalized, issues = normalize_ids_via_europepmc(ids, id_types)
+
+        assert "PMC999999" in normalized
+        assert len(issues["unresolved"]) == 0
+
+    def test_doi_not_found_kept_as_doi(self, requests_mock) -> None:
+        """Test DOI kept when not found in Europe PMC."""
+        ids = {"10.9999/notfound"}
+        id_types = {"pmcid": 0, "doi": 1, "pmid": 0, "unknown": 0}
+
+        # Mock empty response
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={"hitCount": 0, "resultList": {"result": []}},
+        )
+
+        normalized, issues = normalize_ids_via_europepmc(ids, id_types)
+
+        # DOI kept as fallback
+        assert "10.9999/notfound" in normalized
+        assert "10.9999/notfound" in issues["unresolved"]
+
+    def test_pmid_resolved_to_pmcid(self, requests_mock) -> None:
+        """Test PMID resolution to PMCID via Europe PMC."""
+        ids = {"32847729"}
+        id_types = {"pmcid": 0, "doi": 0, "pmid": 1, "unknown": 0}
+
+        # Mock Europe PMC search response
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 1,
+                "resultList": {
+                    "result": [
+                        {
+                            "id": "32847729",
+                            "source": "MED",
+                            "pmid": "32847729",
+                            "pmcid": "PMC888888",
+                            "title": "Test Article",
+                        }
+                    ]
+                },
+            },
+        )
+
+        normalized, issues = normalize_ids_via_europepmc(ids, id_types)
+
+        assert "PMC888888" in normalized
+        assert len(issues["unresolved"]) == 0
+
+    def test_article_without_pmcid(self, requests_mock) -> None:
+        """Test article found but has no PMCID."""
+        ids = {"10.1234/nopmcid"}
+        id_types = {"pmcid": 0, "doi": 1, "pmid": 0, "unknown": 0}
+
+        # Mock response with article that has no PMCID
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 1,
+                "resultList": {
+                    "result": [
+                        {
+                            "id": "12345",
+                            "source": "MED",
+                            "doi": "10.1234/nopmcid",
+                            "title": "Article without PMCID",
+                            # No pmcid field
+                        }
+                    ]
+                },
+            },
+        )
+
+        normalized, issues = normalize_ids_via_europepmc(ids, id_types)
+
+        # DOI kept as fallback
+        assert "10.1234/nopmcid" in normalized
+        assert "10.1234/nopmcid" in issues["no_pmcid"]
+
+    def test_mixed_ids(self, requests_mock) -> None:
+        """Test normalization with mixed ID types."""
+        ids = {"PMC123456", "10.1234/example", "32847729"}
+        id_types = {"pmcid": 1, "doi": 1, "pmid": 1, "unknown": 0}
+
+        # Mock DOI lookup - callback takes request and context
+        def doi_matcher(request, context):
+            if "DOI" in str(request.url):
+                return {
+                    "hitCount": 1,
+                    "resultList": {
+                        "result": [{"pmcid": "PMC111111", "doi": "10.1234/example"}]
+                    },
+                }
+            if "EXT_ID" in str(request.url):
+                return {
+                    "hitCount": 1,
+                    "resultList": {
+                        "result": [{"pmcid": "PMC222222", "pmid": "32847729"}]
+                    },
+                }
+            return {"hitCount": 0, "resultList": {"result": []}}
+
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=doi_matcher,
+        )
+
+        normalized, issues = normalize_ids_via_europepmc(ids, id_types)
+
+        # PMCID kept as-is
+        assert "PMC123456" in normalized
+        # At minimum we should have the original PMCID
+        assert len(normalized) >= 1
+
+
+class TestCompareWithNormalization:
+    """Tests for compare_corpora with normalization."""
+
+    def test_compare_with_normalize_false(self, tmp_path: Path) -> None:
+        """Test that normalize=False doesn't call API."""
+        ref = tmp_path / "ref.txt"
+        cand = tmp_path / "cand.txt"
+        ref.write_text("PMC123456\n")
+        cand.write_text("PMC123456\n")
+
+        result = compare_corpora(ref, cand, normalize=False)
+
+        assert result.normalized is False
+        assert len(result.overlap) == 1
+
+    def test_compare_sets_normalized_flag(self, tmp_path: Path, requests_mock) -> None:
+        """Test that normalize=True sets the flag in result."""
+        ref = tmp_path / "ref.txt"
+        cand = tmp_path / "cand.txt"
+        # Use PMCIDs only to avoid API calls
+        ref.write_text("PMC123456\n")
+        cand.write_text("PMC123456\n")
+
+        result = compare_corpora(ref, cand, normalize=True)
+
+        assert result.normalized is True

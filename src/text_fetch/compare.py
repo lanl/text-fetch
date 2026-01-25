@@ -377,11 +377,113 @@ def load_corpus_ids(path: Path) -> tuple[set[str], dict[str, int]]:
         return parse_id_list(path)
 
 
+def normalize_ids_via_europepmc(
+    ids: set[str],
+    id_types: dict[str, int],
+) -> tuple[set[str], dict[str, list[str]]]:
+    """Normalize IDs to PMCIDs via Europe PMC API.
+
+    Queries Europe PMC to resolve DOIs and PMIDs to PMCIDs for more
+    accurate corpus comparison.
+
+    Args:
+        ids: Set of IDs to normalize
+        id_types: Dict of ID type counts (for logging)
+
+    Returns:
+        Tuple of (set of normalized PMCIDs, dict of resolution issues)
+        Issues dict has keys: "unresolved", "no_pmcid"
+    """
+    from .europepmc import EuropePMCClient
+
+    client = EuropePMCClient()
+    normalized: set[str] = set()
+    issues: dict[str, list[str]] = {"unresolved": [], "no_pmcid": []}
+
+    # Group IDs by type for efficient lookup
+    pmcids: list[str] = []
+    dois: list[str] = []
+    pmids: list[str] = []
+
+    for id_val in ids:
+        id_type = detect_id_type(id_val)
+        if id_type == "pmcid":
+            pmcids.append(id_val)
+        elif id_type == "doi":
+            dois.append(id_val)
+        elif id_type == "pmid":
+            pmids.append(id_val)
+        else:
+            # Unknown IDs kept as-is
+            normalized.add(id_val)
+            issues["unresolved"].append(id_val)
+
+    # PMCIDs already normalized - add directly
+    for pmcid in pmcids:
+        normalized.add(normalize_id(pmcid))
+
+    # Resolve DOIs via Europe PMC
+    for doi in dois:
+        article = client.get_by_doi(doi)
+        if article and article.pmcid:
+            normalized.add(article.pmcid.upper())
+        elif article:
+            # Article found but no PMCID
+            issues["no_pmcid"].append(doi)
+            # Keep DOI as fallback
+            normalized.add(normalize_id(doi))
+        else:
+            issues["unresolved"].append(doi)
+            normalized.add(normalize_id(doi))
+
+    # Resolve PMIDs via Europe PMC
+    for pmid in pmids:
+        article = client.get_by_pmid(pmid)
+        if article and article.pmcid:
+            normalized.add(article.pmcid.upper())
+        elif article:
+            # Article found but no PMCID
+            issues["no_pmcid"].append(pmid)
+            normalized.add(pmid)
+        else:
+            issues["unresolved"].append(pmid)
+            normalized.add(pmid)
+
+    # Log summary
+    total_dois = len(dois)
+    total_pmids = len(pmids)
+    resolved_count = (
+        len(pmcids)
+        + (total_dois - len([d for d in dois if d in issues["unresolved"]]))
+        + (total_pmids - len([p for p in pmids if p in issues["unresolved"]]))
+    )
+    logger.info(
+        "ID normalization: %d/%d resolved to PMCID",
+        resolved_count,
+        len(ids),
+    )
+    if issues["unresolved"]:
+        logger.warning(
+            "%d IDs could not be resolved: %s...",
+            len(issues["unresolved"]),
+            issues["unresolved"][:3],
+        )
+    if issues["no_pmcid"]:
+        logger.warning(
+            "%d articles found but have no PMCID: %s...",
+            len(issues["no_pmcid"]),
+            issues["no_pmcid"][:3],
+        )
+
+    return normalized, issues
+
+
 def compare_corpora(
     reference_path: Path,
     candidate_path: Path,
     reference_label: str | None = None,
     candidate_label: str | None = None,
+    normalize: bool = False,
 ) -> ComparisonResult:
     """Compare two corpora and compute overlap metrics.
 
@@ -395,12 +497,20 @@ def compare_corpora(
         candidate_path: Path to candidate corpus
         reference_label: Optional label for reference corpus
         candidate_label: Optional label for candidate corpus
+        normalize: If True, normalize all IDs to PMCIDs via Europe PMC
 
     Returns:
         ComparisonResult with metrics and ID sets
     """
     ref_ids, ref_types = load_corpus_ids(reference_path)
     cand_ids, cand_types = load_corpus_ids(candidate_path)
+
+    # Optionally normalize IDs via Europe PMC
+    if normalize:
+        logger.info("Normalizing reference corpus IDs...")
+        ref_ids, _ref_issues = normalize_ids_via_europepmc(ref_ids, ref_types)
+        logger.info("Normalizing candidate corpus IDs...")
+        cand_ids, _cand_issues = normalize_ids_via_europepmc(cand_ids, cand_types)
 
     overlap = ref_ids & cand_ids
     ref_only = ref_ids - cand_ids
@@ -418,4 +528,5 @@ def compare_corpora(
         overlap=overlap,
         reference_only=ref_only,
         candidate_only=cand_only,
+        normalized=normalize,
     )

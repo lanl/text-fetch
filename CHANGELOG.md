@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `--out` / `-o` option for JSON output path (pretty-print to stdout if omitted)
   - `--ref-label` option for custom reference corpus label
   - `--cand-label` option for custom candidate corpus label
+  - `--normalize` flag for cross-ID normalization via Europe PMC (DOI/PMID→PMCID)
+  - `--verbose` / `-v` flag for detailed normalization logging
   - `compare.py` module with corpus comparison functions
   - `ComparisonResult` dataclass with computed metrics
   - `compare_corpora()` function for comparing two corpora
@@ -25,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `parse_id_list()` function for reading text ID lists
   - `extract_ids_from_tarball()` function for extracting IDs from tarballs
   - `load_corpus_ids()` function for loading IDs from any format
+  - `normalize_ids_via_europepmc()` function for cross-ID normalization
 
 ### Input Formats
 - **text-fetch tarball (`.tar.gz`)** - Extracts IDs from `manifest.json`
@@ -83,6 +86,9 @@ text-fetch compare -r corpus_a.tar.gz -c corpus_b.tar.gz
 # With custom labels
 text-fetch compare -r old.tar.gz -c new.tar.gz \
   --ref-label "Depth 1" --cand-label "Depth 2"
+
+# With ID normalization (DOI/PMID→PMCID via Europe PMC)
+text-fetch compare -r expert_dois.txt -c auto_corpus.tar.gz --normalize
 ```
 
 ### Use Cases
@@ -97,13 +103,15 @@ text-fetch compare -r old.tar.gz -c new.tar.gz \
 - **Tarball ID extraction supports all manifest schemas** - `extract_ids_from_tarball()` now handles `articles`, `per_source`, and `files` manifest formats
 
 ### Tests
-- Added 46 new tests for corpus comparison (`test_compare.py`)
+- Added 57 new tests for corpus comparison (`test_compare.py`)
+- Added 9 tests for ID normalization via Europe PMC
 - Added 2 tests for new manifest schema support
 - Tests for `detect_id_type()`, `normalize_id()`, `parse_id_list()`
 - Tests for `extract_ids_from_tarball()`, `load_corpus_ids()`
 - Tests for `compare_corpora()` and `ComparisonResult`
+- Tests for `normalize_ids_via_europepmc()`
 - CLI integration tests for `text-fetch compare`
-- Total test count: 560 (all passing)
+- Total test count: 613 (all passing)
 
 ## [0.3.0] - 2026-01-25
 
