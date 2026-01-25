@@ -896,6 +896,13 @@ uv run text-fetch compare \
   --ref-label "Depth 1" \
   --cand-label "Depth 2" \
   --out comparison.json
+
+# With ID normalization (slower but more accurate for mixed IDs)
+# Resolves DOIs and PMIDs to PMCIDs via Europe PMC for cross-ID matching
+uv run text-fetch compare \
+  --reference expert_dois.txt \
+  --candidate auto_corpus.tar.gz \
+  --normalize
 ```
 
 **Input formats:**
