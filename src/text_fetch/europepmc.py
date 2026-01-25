@@ -298,9 +298,14 @@ class EuropePMCClient:
             with contextlib.suppress(ValueError):
                 pub_year = int(year_str)
 
+        # PMC-source articles always have full-text (PMC doesn't accept without it)
+        # but API sometimes returns hasFullText=null for PMC articles
+        source = item.get("source", "")
+        has_full_text = item.get("hasFullText") == "Y" or source == "PMC"
+
         return EuropePMCArticle(
             id=article_id,
-            source=item.get("source", ""),
+            source=source,
             pmid=item.get("pmid"),
             pmcid=item.get("pmcid"),
             doi=item.get("doi"),
@@ -311,7 +316,7 @@ class EuropePMCClient:
             pub_year=pub_year,
             first_publication_date=pub_date,
             is_open_access=item.get("isOpenAccess") == "Y",
-            has_full_text=item.get("hasFullText") == "Y",
+            has_full_text=has_full_text,
         )
 
     def get_full_text_xml(self, pmcid: str) -> str | None:
