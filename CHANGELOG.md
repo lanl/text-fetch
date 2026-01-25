@@ -101,6 +101,7 @@ text-fetch compare -r expert_dois.txt -c auto_corpus.tar.gz --normalize
 - **`--pmcid` seeds now used correctly for expansion** - When `--pmcid` flags are provided, those IDs are used directly as expansion seeds instead of re-running the query
 - **Removed arbitrary `--max-expansion` cap** - Default changed from 5000 to 0 (unlimited) since rate limiting already handles API load
 - **Tarball ID extraction supports all manifest schemas** - `extract_ids_from_tarball()` now handles `articles`, `per_source`, and `files` manifest formats
+- **Europe PMC PMC-source download failure** - Fixed 404 errors when downloading PMC-source articles (`SRC:PMC`). Europe PMC doesn't host full-text XML for PMC articles - they only store metadata. For `source="PMC"` articles, text-fetch now uses NCBI's efetch API to download the actual JATS XML. Requires `--email` option or `NCBI_EMAIL` env var for PMC-source articles.
 
 ### Tests
 - Added 57 new tests for corpus comparison (`test_compare.py`)

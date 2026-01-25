@@ -304,6 +304,10 @@ uv run text-fetch europepmc fetch --author "hlavacek ws" --out ./output --resume
 
 # Update mode: fetch only new papers since last fetch
 uv run text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus --update
+
+# PMC-source articles require --email (see note below)
+uv run text-fetch europepmc fetch --query 'ebolavirus AND SRC:PMC' \
+  --email your@email.com --out ./output
 ```
 
 **Key advantages:**
@@ -312,7 +316,27 @@ uv run text-fetch europepmc fetch --author "hlavacek ws" --workspace ./my-corpus
 - **Cursor-based pagination** - Fast for deep result sets
 - **European content** - Access to Horizon 2020/Europe funded research
 
-**Query syntax:** Uses Lucene syntax (`AUTH:`, `TITLE:`, `DOI:`, `KEYWORD:`, `FIRST_PDATE:`, etc.). See [Europe PMC documentation](https://europepmc.org/RestfulWebService).
+**Important: PMC-source articles require `--email`**
+
+Europe PMC indexes articles from multiple sources, including PMC (PubMed Central). However, Europe PMC doesn't host the full-text XML for PMC-source articles (`source="PMC"`) - they only store metadata. When text-fetch encounters PMC-source articles, it automatically downloads them from NCBI instead, which requires an email for API access.
+
+```bash
+# Queries with SRC:PMC need --email
+uv run text-fetch europepmc fetch --query 'ebolavirus vaccine SRC:PMC' \
+  --email your@email.com --out ./output
+
+# Citation expansion often finds PMC articles, so always use --email with --expand
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --email your@email.com --out ./output
+
+# Set via environment variable
+export NCBI_EMAIL="your@email.com"
+uv run text-fetch europepmc fetch --query 'SRC:PMC' --out ./output
+```
+
+Non-PMC sources (MED, PPR, etc.) download directly from Europe PMC and don't require email.
+
+**Query syntax:** Uses Lucene syntax (`AUTH:`, `TITLE:`, `DOI:`, `KEYWORD:`, `FIRST_PDATE:`, `SRC:`, etc.). See [Europe PMC documentation](https://europepmc.org/RestfulWebService).
 
 ### Corpus Workspace (v0.2.0)
 

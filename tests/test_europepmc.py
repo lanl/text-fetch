@@ -1153,18 +1153,19 @@ class TestExpandPapers:
 class TestFetchEuropepmc:
     """Tests for fetch_europepmc function."""
 
-    def test_mark_failed_called_on_fetch_none(
+    def test_mark_failed_called_on_fetch_none_med_source(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """mark_failed is called when get_full_text_xml returns None."""
-        # Mock search to return one article with PMCID
+        """mark_failed is called when get_full_text_xml returns None (MED source)."""
+        # Mock search to return one MED-source article with PMCID
+        # MED source uses Europe PMC download (not NCBI)
         search_response = {
             "hitCount": 1,
             "resultList": {
                 "result": [
                     {
                         "id": "12345",
-                        "source": "PMC",
+                        "source": "MED",  # MED source uses Europe PMC
                         "pmcid": "PMC123456",
                         "title": "Test Article",
                         "isOpenAccess": "Y",
@@ -1178,7 +1179,6 @@ class TestFetchEuropepmc:
             json=search_response,
         )
         # Mock get_full_text_xml to return None (404)
-        # API endpoint uses numeric ID without PMC prefix
         requests_mock.get(
             "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
             status_code=404,
@@ -1202,18 +1202,18 @@ class TestFetchEuropepmc:
             failed_ids = [f["id"] for f in checkpoint_data.get("failed", [])]
             assert "PMC123456" in failed_ids
 
-    def test_checkpoint_contains_failed_ids(
+    def test_checkpoint_contains_failed_ids_med_source(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """Checkpoint records failed IDs when fetch fails."""
-        # Mock search
+        """Checkpoint records failed IDs when fetch fails (MED source)."""
+        # Mock search with MED source articles
         search_response = {
             "hitCount": 2,
             "resultList": {
                 "result": [
                     {
                         "id": "1",
-                        "source": "PMC",
+                        "source": "MED",  # MED source uses Europe PMC
                         "pmcid": "PMC111111",
                         "title": "Article 1",
                         "isOpenAccess": "Y",
@@ -1221,7 +1221,7 @@ class TestFetchEuropepmc:
                     },
                     {
                         "id": "2",
-                        "source": "PMC",
+                        "source": "MED",  # MED source uses Europe PMC
                         "pmcid": "PMC222222",
                         "title": "Article 2",
                         "isOpenAccess": "Y",
@@ -1234,7 +1234,7 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # First article fails - API endpoint uses numeric ID without PMC prefix
+        # First article fails
         requests_mock.get(
             "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111111/fullTextXML",
             status_code=500,
@@ -1254,10 +1254,10 @@ class TestFetchEuropepmc:
         assert stats["errors"] == 1
         assert stats["fetched"] == 1
 
-    def test_update_source_record_not_called_on_errors(
+    def test_update_source_record_not_called_on_errors_med_source(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """update_source_record not called when there are errors."""
+        """update_source_record not called when there are errors (MED source)."""
         from unittest.mock import patch
 
         from text_fetch.workspace import Workspace
@@ -1265,14 +1265,14 @@ class TestFetchEuropepmc:
         # Create workspace
         ws = Workspace.init(tmp_path / "corpus")
 
-        # Mock search to return one article
+        # Mock search to return one MED-source article
         search_response = {
             "hitCount": 1,
             "resultList": {
                 "result": [
                     {
                         "id": "12345",
-                        "source": "PMC",
+                        "source": "MED",  # MED source uses Europe PMC
                         "pmcid": "PMC123456",
                         "title": "Test Article",
                         "isOpenAccess": "Y",
@@ -1286,7 +1286,6 @@ class TestFetchEuropepmc:
             json=search_response,
         )
         # Mock get_full_text_xml to fail
-        # API endpoint uses numeric ID without PMC prefix
         requests_mock.get(
             "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/fullTextXML",
             status_code=500,
@@ -1306,10 +1305,10 @@ class TestFetchEuropepmc:
             # update_source_record should NOT have been called due to errors
             mock_update.assert_not_called()
 
-    def test_update_source_record_called_on_success(
+    def test_update_source_record_called_on_success_med_source(
         self, tmp_path: Path, requests_mock
     ) -> None:
-        """update_source_record called when no errors."""
+        """update_source_record called when no errors (MED source)."""
         from unittest.mock import patch
 
         from text_fetch.workspace import Workspace
@@ -1317,14 +1316,14 @@ class TestFetchEuropepmc:
         # Create workspace
         ws = Workspace.init(tmp_path / "corpus")
 
-        # Mock search to return one article
+        # Mock search to return one MED-source article
         search_response = {
             "hitCount": 1,
             "resultList": {
                 "result": [
                     {
                         "id": "12345",
-                        "source": "PMC",
+                        "source": "MED",  # MED source uses Europe PMC
                         "pmcid": "PMC123456",
                         "title": "Test Article",
                         "isOpenAccess": "Y",
@@ -1337,7 +1336,7 @@ class TestFetchEuropepmc:
             "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
             json=search_response,
         )
-        # Mock get_full_text_xml to succeed - API uses numeric ID without PMC prefix
+        # Mock get_full_text_xml to succeed
         valid_xml = """<?xml version="1.0"?>
         <article>
             <front>
@@ -1369,3 +1368,172 @@ class TestFetchEuropepmc:
             assert stats["fetched"] == 1
             # update_source_record SHOULD have been called
             mock_update.assert_called_once()
+
+    def test_pmc_source_uses_ncbi_with_email(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """PMC-source articles use NCBI download when email is provided."""
+        # Mock search to return one PMC-source article
+        search_response = {
+            "hitCount": 1,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345",
+                        "source": "PMC",  # PMC source requires NCBI
+                        "pmcid": "PMC123456",
+                        "title": "Test Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # Mock NCBI efetch to succeed
+        valid_xml = """<?xml version="1.0"?>
+        <pmc-articleset>
+        <article>
+            <front>
+                <article-meta>
+                    <article-id pub-id-type="pmc">123456</article-id>
+                    <title-group>
+                        <article-title>Test Article Title</article-title>
+                    </title-group>
+                </article-meta>
+            </front>
+            <body><p>Test content body.</p></body>
+        </article>
+        </pmc-articleset>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=valid_xml,
+        )
+
+        stats = fetch_europepmc(
+            query="test",
+            output_dir=tmp_path,
+            max_results=1,
+            email="test@example.com",
+        )
+
+        assert stats["errors"] == 0
+        assert stats["fetched"] == 1
+
+    def test_pmc_source_skipped_without_email(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """PMC-source articles are skipped when no email provided."""
+        # Mock search to return one PMC-source article
+        search_response = {
+            "hitCount": 1,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "12345",
+                        "source": "PMC",  # PMC source requires NCBI
+                        "pmcid": "PMC123456",
+                        "title": "Test Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    }
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # No NCBI mock needed - should not be called
+
+        stats = fetch_europepmc(
+            query="test",
+            output_dir=tmp_path,
+            max_results=1,
+            # No email provided
+        )
+
+        # Article should be skipped, not errored
+        assert stats["skipped"] == 1
+        assert stats["fetched"] == 0
+        assert stats["errors"] == 0
+
+    def test_mixed_sources_hybrid_download(self, tmp_path: Path, requests_mock) -> None:
+        """Mixed sources use appropriate download backends."""
+        # Mock search to return both MED and PMC source articles
+        search_response = {
+            "hitCount": 2,
+            "resultList": {
+                "result": [
+                    {
+                        "id": "1",
+                        "source": "MED",  # Uses Europe PMC
+                        "pmcid": "PMC111111",
+                        "title": "MED Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                    {
+                        "id": "2",
+                        "source": "PMC",  # Uses NCBI
+                        "pmcid": "PMC222222",
+                        "title": "PMC Article",
+                        "isOpenAccess": "Y",
+                        "hasFullText": "Y",
+                    },
+                ]
+            },
+        }
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json=search_response,
+        )
+        # Mock Europe PMC for MED source
+        med_xml = """<?xml version="1.0"?>
+        <article>
+            <front>
+                <article-meta>
+                    <article-id pub-id-type="pmcid">PMC111111</article-id>
+                    <title-group>
+                        <article-title>MED Article</article-title>
+                    </title-group>
+                </article-meta>
+            </front>
+            <body><p>MED content.</p></body>
+        </article>"""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111111/fullTextXML",
+            text=med_xml,
+        )
+        # Mock NCBI for PMC source
+        pmc_xml = """<?xml version="1.0"?>
+        <pmc-articleset>
+        <article>
+            <front>
+                <article-meta>
+                    <article-id pub-id-type="pmc">222222</article-id>
+                    <title-group>
+                        <article-title>PMC Article</article-title>
+                    </title-group>
+                </article-meta>
+            </front>
+            <body><p>PMC content.</p></body>
+        </article>
+        </pmc-articleset>"""
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=pmc_xml,
+        )
+
+        stats = fetch_europepmc(
+            query="test",
+            output_dir=tmp_path,
+            max_results=2,
+            email="test@example.com",
+        )
+
+        assert stats["fetched"] == 2
+        assert stats["errors"] == 0

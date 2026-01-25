@@ -952,14 +952,20 @@ def fetch_europepmc(
     progress_callback: Callable[[str, int, int], None] | None = None,
     resume: bool = False,
     update: bool = False,
+    email: str | None = None,
+    api_key: str | None = None,
 ) -> dict[str, Any]:
     """Fetch Europe PMC articles and save as JATS.
 
     Pipeline:
     1. Search Europe PMC or use provided PMCIDs
     2. Filter for full-text availability
-    3. Download JATS XML
+    3. Download JATS XML (uses NCBI for PMC-source articles)
     4. Validate and save
+
+    Note: Europe PMC doesn't host full-text XML for PMC-source articles.
+    For articles with source="PMC", this function uses NCBI's efetch API
+    to download the full-text. This requires the email parameter.
 
     Args:
         query: Raw Lucene query string (overrides other search params).
@@ -976,6 +982,8 @@ def fetch_europepmc(
         progress_callback: Optional callback(pmcid, current, total).
         resume: Resume from checkpoint if available.
         update: Only fetch papers since last fetch (requires workspace).
+        email: Email for NCBI API (required for PMC-source articles).
+        api_key: Optional NCBI API key for higher rate limits.
 
     Returns:
         Statistics dict with:
@@ -996,6 +1004,7 @@ def fetch_europepmc(
         get_checkpoint_path,
         load_checkpoint_if_exists,
     )
+    from .ncbi import NCBIClient
     from .pmc import JATSValidator, save_pmc_article
 
     # Determine output path and search_id
@@ -1121,6 +1130,19 @@ def fetch_europepmc(
         )
         checkpoint.reset_save_tracking()
 
+    # Check if any PMC-source articles exist (require email for NCBI download)
+    pmc_source_articles = [a for a in fetchable if a.source == "PMC"]
+    if pmc_source_articles and not email:
+        logger.warning(
+            "Found %d PMC-source articles but no email provided. "
+            "PMC-source articles require NCBI API (--email). "
+            "These articles will be skipped.",
+            len(pmc_source_articles),
+        )
+
+    # Create NCBI client if needed (lazy initialization)
+    ncbi_client: NCBIClient | None = None
+
     # Process articles
     validator = JATSValidator()
     total = len(fetchable)
@@ -1149,8 +1171,31 @@ def fetch_europepmc(
             continue
 
         try:
-            # Download full-text XML
-            xml_content = client.get_full_text_xml(article_pmcid)
+            # Download full-text XML based on source
+            # PMC-source articles: Europe PMC doesn't host their full-text,
+            # so we must use NCBI's efetch API
+            if article.source == "PMC":
+                if not email:
+                    # Skip PMC-source articles if no email (already warned above)
+                    stats["skipped"] += 1
+                    checkpoint.mark_failed(
+                        article_pmcid,
+                        "PMC-source requires --email for NCBI download",
+                    )
+                    checkpoint.save_if_needed(checkpoint_path)
+                    continue
+
+                # Initialize NCBI client on first use
+                if ncbi_client is None:
+                    ncbi_client = NCBIClient(email=email, api_key=api_key)
+                    if verbose:
+                        logger.info("Using NCBI for PMC-source article downloads")
+
+                xml_content = ncbi_client.fetch_pmc_xml(article_pmcid)
+            else:
+                # Non-PMC sources (MED, PPR, etc.): use Europe PMC directly
+                xml_content = client.get_full_text_xml(article_pmcid)
+
             if xml_content is None:
                 stats["errors"] += 1
                 checkpoint.mark_failed(article_pmcid, "Failed to fetch full-text XML")

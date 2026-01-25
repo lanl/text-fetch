@@ -48,6 +48,23 @@ def europepmc(ctx: click.Context) -> None:
     is_flag=True,
     help="Only fetch papers since last fetch (requires workspace)",
 )
+# NCBI options (required for PMC-source articles)
+@click.option(
+    "--email",
+    type=str,
+    default=None,
+    envvar="NCBI_EMAIL",
+    help="Email for NCBI API (required for PMC-source articles). "
+    "Can also be set via NCBI_EMAIL env var.",
+)
+@click.option(
+    "--api-key",
+    type=str,
+    default=None,
+    envvar="NCBI_API_KEY",
+    help="NCBI API key for higher rate limits (optional). "
+    "Can also be set via NCBI_API_KEY env var.",
+)
 # Expansion options
 @click.option(
     "--expand-references",
@@ -105,6 +122,8 @@ def europepmc_fetch(
     workspace: str | None,
     resume: bool,
     update: bool,
+    email: str | None,
+    api_key: str | None,
     expand_references: bool,
     expand_citations: bool,
     expand: bool,
@@ -120,25 +139,30 @@ def europepmc_fetch(
 
     Downloads native JATS XML (no GROBID required).
 
+    NOTE: PMC-source articles (SRC:PMC) require --email because Europe PMC
+    doesn't host their full-text XML. For these articles, text-fetch
+    downloads from NCBI instead.
+
     \b
     Examples:
-        # Search by author
+        # Search by author (non-PMC sources work without email)
         text-fetch europepmc fetch --author "hlavacek ws" --out ./output
 
-        # Search with keywords
-        text-fetch europepmc fetch --keyword "systems biology" --out ./output
+        # Search PMC-source articles (requires email)
+        text-fetch europepmc fetch --query "ebolavirus AND SRC:PMC" \\
+            --email your@email.com --out ./output
 
         # Expand by following references (papers seeds cite)
         text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
-            --expand-references --out ./output
+            --expand-references --email your@email.com --out ./output
 
         # Expand by following citations (papers citing seeds)
         text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
-            --expand-citations --out ./output
+            --expand-citations --email your@email.com --out ./output
 
         # Both directions
         text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
-            --expand --out ./output
+            --expand --email your@email.com --out ./output
 
         # Preview expansion (dry-run)
         text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
@@ -146,7 +170,8 @@ def europepmc_fetch(
 
         # Custom expansion options
         text-fetch europepmc fetch --keyword "ebolavirus vaccine" \\
-            --expand --expansion-depth 2 --max-expansion 10000 --out ./output
+            --expand --expansion-depth 2 --max-expansion 10000 \\
+            --email your@email.com --out ./output
 
         # Add to workspace for deduplication
         text-fetch europepmc fetch --author "hlavacek ws" \\
@@ -216,6 +241,8 @@ def europepmc_fetch(
             progress_callback=progress_callback,
             resume=resume,
             update=update,
+            email=email,
+            api_key=api_key,
         )
     finally:
         if progress_bar is not None:
@@ -381,6 +408,8 @@ def europepmc_fetch(
                             open_access_only=not include_non_oa,
                             verbose=verbose,
                             progress_callback=exp_progress_cb,
+                            email=email,
+                            api_key=api_key,
                         )
                     finally:
                         if exp_progress_bar is not None:
