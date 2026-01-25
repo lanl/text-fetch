@@ -36,6 +36,11 @@ from ._common import handle_tarball_creation
 )
 @click.option("--no-dedupe", is_flag=True, help="Disable DOI deduplication")
 @click.option(
+    "--max-results",
+    default=None,
+    help="Max results per source (number or 'all' for unlimited)",
+)
+@click.option(
     "--resume",
     is_flag=True,
     help="Resume from checkpoints if interrupted",
@@ -98,6 +103,7 @@ def unified_fetch_cmd(
     grobid_url: str | None,
     sources: str | None,
     no_dedupe: bool,
+    max_results: str | None,
     resume: bool,
     update: bool,
     expand_references: bool,
@@ -217,6 +223,20 @@ def unified_fetch_cmd(
     if sources:
         search_config.sources = [s.strip() for s in sources.split(",")]
 
+    # Override max_results if specified
+    if max_results is not None:
+        if max_results.lower() == "all":
+            # None means unlimited in the fetch functions
+            search_config.max_results_per_source = 0  # 0 = unlimited
+        else:
+            try:
+                search_config.max_results_per_source = int(max_results)
+            except ValueError:
+                raise click.UsageError(
+                    f"Invalid --max-results value: {max_results}. "
+                    "Use a number or 'all' for unlimited."
+                ) from None
+
     # Override deduplication (when using workspace, deduplication is automatic)
     if no_dedupe and not ws:
         search_config.deduplicate_by_doi = False
@@ -239,7 +259,8 @@ def unified_fetch_cmd(
     # Show config summary
     click.echo(f"Config: {config_source}")
     click.echo(f"Sources: {', '.join(effective_sources)}")
-    click.echo(f"Max per source: {search_config.max_results_per_source}")
+    max_display = search_config.max_results_per_source or "unlimited"
+    click.echo(f"Max per source: {max_display}")
     if ws:
         click.echo(f"Workspace: {ws.path} (auto-deduplication)")
     else:
