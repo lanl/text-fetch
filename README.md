@@ -735,7 +735,83 @@ uv run text-fetch workspace update ./my-corpus --source arxiv --grobid-url http:
 - **Config validation** - Changing search criteria resets the checkpoint
 - **Workspace integration** - `--update` requires `--workspace` for date tracking
 
-### Workflow 8: Create Tarball from Existing Files (v0.2.5)
+### Workflow 8: Citation Expansion from Seed Papers (v0.3.0)
+
+Expand a corpus by following citation relationships from seed papers:
+
+```bash
+# Basic: Expand by following both references and citations
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --out ./output
+# Fetched 127 seed papers
+# Expanding: 127 seeds → 2,341 references, 892 citations
+# After dedup: 2,987 unique papers (456 duplicates skipped)
+
+# Follow only references (papers that seeds cite)
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand-references --out ./output
+
+# Follow only citations (papers citing seeds)
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand-citations --out ./output
+
+# Dry-run: Preview expansion stats before proceeding
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --dry-run --out ./output
+# ═══════════════════════════════════════════════════════════════════
+# EXPANSION DRY-RUN REPORT
+# ═══════════════════════════════════════════════════════════════════
+# 
+# SEED COVERAGE:
+#   Total seeds:            127
+#   Seeds with citations:    98 (77%)
+#   Seeds with references:  115 (91%)
+# 
+# EXPANSION ESTIMATE:
+#   References found:     ~2,341 papers
+#   Citations found:        ~892 papers
+#   Total unique:        ~2,987 papers
+# 
+# Continue with expansion? [y/N]
+
+# Auto-confirm dry-run
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand --dry-run --yes --out ./output
+
+# Custom expansion options
+uv run text-fetch europepmc fetch --keyword "ebolavirus vaccine" \
+  --expand \
+  --expansion-depth 1 \      # Number of hops (default: 1)
+  --max-expansion 10000 \    # Safety cap (default: 5000, 0=unlimited)
+  --out ./output
+```
+
+**Why citation expansion?**
+- **Keyword search** finds papers that *say* the right words
+- **Citation expansion** finds papers that *matter* to a field:
+  - **References:** Foundational papers (methods, prior work, reviews)
+  - **Citations:** Recent papers building on your seeds (follow-up studies)
+
+**Output structure with expansion:**
+```
+output/
+├── seeds/                    # Original seed papers
+│   ├── valid/
+│   └── incomplete/
+├── expanded/                 # Papers from expansion
+│   ├── valid/
+│   └── incomplete/
+├── expansion_manifest.json   # Expansion metadata
+└── manifest.json             # Overall manifest
+```
+
+**Expansion manifest includes:**
+- `expansion_config` - Options used for expansion
+- `seed_coverage` - Stats on seeds with citations/references
+- `expansion_stats` - Total found, duplicates skipped
+- `layers` - Papers at each expansion depth
+
+### Workflow 9: Create Tarball from Existing Files (v0.2.5)
 
 Create tarballs from existing JATS files without re-running a fetch:
 

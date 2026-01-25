@@ -283,6 +283,166 @@ xml = client.get_full_text_xml("PMC12345")
 | `get_by_pmid(pmid)` | Get article by PubMed ID |
 | `get_by_doi(doi)` | Get article by DOI |
 | `get_full_text_xml(pmcid)` | Download JATS XML |
+| `get_citations(source, identifier)` | Get papers citing this paper |
+| `get_references(source, identifier)` | Get papers this paper cites |
+| `get_all_citations(source, identifier)` | Get all citations with pagination |
+| `get_all_references(source, identifier)` | Get all references with pagination |
+
+### Citation/Reference API (v0.3.0)
+
+Get papers that cite a paper or papers it references:
+
+```python
+from text_fetch.europepmc import EuropePMCClient
+
+client = EuropePMCClient()
+
+# Get citations (papers citing this paper)
+citations, total = client.get_citations("MED", "32487503")
+print(f"Found {total} papers citing this article")
+for cite in citations:
+    print(f"  - {cite.get('title')} ({cite.get('pubYear')})")
+
+# Get references (papers this paper cites)
+references, total = client.get_references("MED", "32487503")
+print(f"This paper cites {total} papers")
+
+# Get all with pagination (handles >1000 results)
+all_citations = client.get_all_citations("PMC", "PMC7343657", max_results=5000)
+all_references = client.get_all_references("PMC", "PMC7343657")
+```
+
+**API Parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `source` | Source database: "MED" (PubMed), "PMC", "PPR" (preprints), etc. |
+| `identifier` | Paper ID: PMID for MED, PMCID for PMC (with or without "PMC" prefix) |
+| `page` | Page number (1-indexed) |
+| `page_size` | Results per page (max 1000) |
+| `max_results` | For pagination helpers: limit total results |
+
+### Citation Expansion (v0.3.0)
+
+Expand a corpus by following citation relationships:
+
+```python
+from text_fetch.europepmc import (
+    EuropePMCClient,
+    EuropePMCArticle,
+    expand_papers,
+    ExpansionResult,
+)
+
+client = EuropePMCClient()
+
+# Get seed papers from search
+seeds = list(client.iter_search('AUTH:"hlavacek ws"', max_results=50))
+
+# Expand by following both references and citations
+result = expand_papers(
+    client=client,
+    seeds=seeds,
+    expand_references=True,
+    expand_citations=True,
+    depth=1,              # Number of hops (1 = direct only)
+    max_expansion=5000,   # Safety cap (0 = unlimited)
+)
+
+print(f"Total expanded: {result.total_expanded}")
+print(f"References found: {result.expansion_stats['references_found']}")
+print(f"Citations found: {result.expansion_stats['citations_found']}")
+print(f"Duplicates skipped: {result.expansion_stats['duplicates_skipped']}")
+
+# Access expanded papers by depth
+for depth, papers in result.expanded_papers.items():
+    print(f"Depth {depth}: {len(papers)} papers")
+
+# Get all papers as flat list
+all_papers = result.all_papers
+```
+
+**expand_papers() Function:**
+
+```python
+def expand_papers(
+    client: EuropePMCClient,
+    seeds: list[EuropePMCArticle],
+    expand_references: bool = False,
+    expand_citations: bool = False,
+    depth: int = 1,
+    max_expansion: int | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+) -> ExpansionResult:
+    """
+    Expand seed papers by following citation relationships.
+    
+    Args:
+        client: Europe PMC client instance
+        seeds: List of seed papers to expand from
+        expand_references: If True, follow references (papers seeds cite)
+        expand_citations: If True, follow citations (papers citing seeds)
+        depth: Number of expansion hops (1 = direct only)
+        max_expansion: Optional cap on total expanded papers
+        progress_callback: Optional callback(message, current, total)
+        
+    Returns:
+        ExpansionResult with expanded papers and metadata
+    """
+```
+
+**ExpansionResult Dataclass:**
+
+```python
+@dataclass
+class ExpansionResult:
+    """Result of citation/reference expansion."""
+    
+    expanded_papers: dict[int, list[dict]]  # {depth: [paper_dicts]}
+    config: dict                            # Expansion options used
+    seed_coverage: dict                     # Stats on seeds
+    expansion_stats: dict                   # Expansion statistics
+    id_issues: dict                         # ID problems encountered
+    layers: list[dict]                      # Per-layer summaries
+    
+    @property
+    def total_expanded(self) -> int:
+        """Total unique papers found."""
+        return sum(len(papers) for papers in self.expanded_papers.values())
+    
+    @property
+    def all_papers(self) -> list[dict]:
+        """Flat list of all expanded papers."""
+        return [p for papers in self.expanded_papers.values() for p in papers]
+    
+    def to_dict(self) -> dict:
+        """Convert to dict for JSON serialization."""
+```
+
+**Seed Coverage (from result.seed_coverage):**
+
+```python
+{
+    "total_seeds": 127,
+    "seeds_with_citations": 98,
+    "seeds_with_references": 115,
+    "seeds_with_both": 95,
+    "seeds_with_neither": 8,
+    "citation_coverage_pct": 77.2,
+    "reference_coverage_pct": 90.6,
+}
+```
+
+**Expansion Stats (from result.expansion_stats):**
+
+```python
+{
+    "references_found": 5234,
+    "citations_found": 2156,
+    "total_unique": 6890,
+    "duplicates_skipped": 500,
+}
+```
 
 **Query Builder:**
 
