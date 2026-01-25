@@ -366,7 +366,12 @@ def unified_fetch_cmd(
 
     # Handle dry-run output
     if stats.get("dry_run"):
-        _display_dry_run_report(stats)
+        _display_dry_run_report(
+            stats,
+            output_dir=out,
+            email_configured=bool(resolved_email),
+            api_key_configured=bool(resolved_api_key),
+        )
         if not yes and not click.confirm("\nContinue with fetch?"):
             click.echo("Fetch cancelled.")
             return
@@ -450,11 +455,24 @@ def unified_fetch_cmd(
         )
 
 
-def _display_dry_run_report(stats: dict) -> None:
+def _display_dry_run_report(
+    stats: dict,
+    output_dir: str,
+    email_configured: bool,
+    api_key_configured: bool,
+) -> None:
     """Display dry-run expansion report."""
     click.echo("\n" + "=" * 60)
     click.echo("EXPANSION DRY-RUN PREVIEW")
     click.echo("=" * 60)
+
+    # Output configuration
+    click.echo("\nOUTPUT")
+    click.echo(f"  Directory: {output_dir}")
+    email_status = "configured ✓" if email_configured else "NOT SET ✗"
+    api_status = "configured ✓" if api_key_configured else "not set"
+    click.echo(f"  NCBI Email: {email_status}")
+    click.echo(f"  NCBI API Key: {api_status}")
 
     expansion = stats.get("expansion_result", {})
     seed_stats = expansion.get("seed_stats", {})
