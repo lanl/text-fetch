@@ -375,19 +375,47 @@ def europepmc_fetch(
                 manifest_path.write_text(json.dumps(manifest_data, indent=2))
                 click.echo(f"\nExpansion manifest saved: {manifest_path}")
 
-                # FIX: Actually fetch the expanded papers!
-                # Extract PMCIDs from expanded papers
+                # Look up expanded papers to find their PMCIDs
+                # Citation/reference API often doesn't include PMCID in results
+                click.echo("\nLooking up PMCIDs for expanded papers...")
                 expanded_pmcids: list[str] = []
+                papers_without_pmcid = 0
+
                 for papers in expansion_result.expanded_papers.values():
                     for paper in papers:
+                        # First check if PMCID already present
                         raw_pmcid = paper.get("pmcid")
-                        if raw_pmcid is None:
+                        if raw_pmcid:
+                            pmcid_norm = str(raw_pmcid).upper()
+                            if not pmcid_norm.startswith("PMC"):
+                                pmcid_norm = f"PMC{pmcid_norm}"
+                            expanded_pmcids.append(pmcid_norm)
                             continue
-                        # Normalize PMCID
-                        pmcid_norm = str(raw_pmcid).upper()
-                        if not pmcid_norm.startswith("PMC"):
-                            pmcid_norm = f"PMC{pmcid_norm}"
-                        expanded_pmcids.append(pmcid_norm)
+
+                        # Need to look up the paper to find PMCID
+                        source = paper.get("source", "")
+                        paper_id = paper.get("id")
+                        if source == "MED" and paper_id:
+                            # Look up by PMID
+                            article = client.get_by_pmid(str(paper_id))
+                            if article and article.pmcid:
+                                expanded_pmcids.append(article.pmcid)
+                            else:
+                                papers_without_pmcid += 1
+                        elif source == "PMC" and paper_id:
+                            # Already have PMCID-like ID
+                            pmcid_norm = str(paper_id).upper()
+                            if not pmcid_norm.startswith("PMC"):
+                                pmcid_norm = f"PMC{pmcid_norm}"
+                            expanded_pmcids.append(pmcid_norm)
+                        else:
+                            papers_without_pmcid += 1
+
+                if papers_without_pmcid > 0:
+                    click.echo(
+                        f"  {papers_without_pmcid} papers don't have PMCIDs "
+                        "(no full-text available)"
+                    )
 
                 if expanded_pmcids:
                     click.echo(f"\nFetching {len(expanded_pmcids)} expanded papers...")
