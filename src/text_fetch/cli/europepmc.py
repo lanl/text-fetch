@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -218,6 +219,12 @@ def europepmc_fetch(
             click.echo(f"Using workspace: {ws_path}")
 
     # ==========================================================================
+    # TIMING TRACKING
+    # ==========================================================================
+    timing: dict[str, float] = {}
+    t_start = time.monotonic()
+
+    # ==========================================================================
     # SEED PAPERS SECTION
     # ==========================================================================
     click.echo("=" * 50)
@@ -280,6 +287,8 @@ def europepmc_fetch(
         click.echo(f"  Errors:     {stats['errors']}")
     if stats.get("duplicates_skipped", 0) > 0:
         click.echo(f"  Duplicates: {stats['duplicates_skipped']}")
+
+    timing["seeds"] = time.monotonic() - t_start
 
     # ==========================================================================
     # CITATION EXPANSION SECTION
@@ -426,7 +435,10 @@ def europepmc_fetch(
                     click.echo(f"  Duplicates removed:               {duplicates:,}")
                 click.echo(f"  Unique papers to look up:         {total_unique:,}")
 
+                timing["expansion"] = time.monotonic() - t_start
+
                 # Look up PMCIDs with tracking by type
+                t_lookup_start = time.monotonic()
                 click.echo("\nLooking up PMCIDs...")
                 ref_pmcids: list[str] = []
                 cite_pmcids: list[str] = []
@@ -474,6 +486,8 @@ def europepmc_fetch(
                                 cites_no_pmcid += 1
                             else:
                                 refs_no_pmcid += 1
+
+                timing["lookup"] = time.monotonic() - t_lookup_start
 
                 # Show PMCID lookup results
                 click.echo("\nPMCID lookup results:")
@@ -545,6 +559,12 @@ def europepmc_fetch(
                     if exp_stats.get("duplicates_skipped"):
                         click.echo(f"  Duplicates: {exp_stats['duplicates_skipped']:,}")
 
+                    timing["expanded"] = (
+                        time.monotonic() - t_start - timing.get("expansion", 0)
+                    )
+
+    timing["total"] = time.monotonic() - t_start
+
     # ==========================================================================
     # RECORD SEARCH IN WORKSPACE
     # ==========================================================================
@@ -601,6 +621,20 @@ def europepmc_fetch(
     click.echo("-" * 30)
     click.echo(f"TOTAL:      {total_corpus:,} papers")
 
+    # Display timing
+    click.echo("\nTiming:")
+    if "seeds" in timing:
+        click.echo(f"  Seed download:      {_format_duration(timing['seeds'])}")
+    if "expansion" in timing:
+        exp_time = timing["expansion"] - timing.get("seeds", 0)
+        click.echo(f"  Citation expansion: {_format_duration(exp_time)}")
+    if "lookup" in timing:
+        click.echo(f"  PMCID lookup:       {_format_duration(timing['lookup'])}")
+    if "expanded" in timing:
+        click.echo(f"  Expanded download:  {_format_duration(timing['expanded'])}")
+    click.echo("  ─────────────────────")
+    click.echo(f"  Total:              {_format_duration(timing.get('total', 0))}")
+
     if ws:
         click.echo(f"\nWorkspace: {ws.path}")
     else:
@@ -624,6 +658,19 @@ def europepmc_fetch(
         click.echo(
             "Note: Use 'text-fetch workspace build' to create tarball from workspace"
         )
+
+
+def _format_duration(seconds: float) -> str:
+    """Format duration in human-readable form."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes < 60:
+        return f"{minutes}:{secs:02d}"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}:{mins:02d}:{secs:02d}"
 
 
 def _display_expansion_report(result: ExpansionResult) -> None:
