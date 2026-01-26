@@ -93,6 +93,11 @@ from ._common import handle_tarball_creation
     help="Resume from saved expansion plan (skip expansion analysis)",
 )
 @click.option("--tarball", is_flag=True, help="Create tarball of results")
+@click.option(
+    "--tarball-only",
+    is_flag=True,
+    help="Create tarball and remove raw XML files (saves storage)",
+)
 @click.option("--tarball-name", default=None, help="Custom tarball filename")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
 @click.pass_context
@@ -119,6 +124,7 @@ def unified_fetch_cmd(
     yes: bool,
     from_plan: str | None,
     tarball: bool,
+    tarball_only: bool,
     tarball_name: str | None,
     verbose: bool,
 ) -> None:
@@ -475,11 +481,14 @@ def unified_fetch_cmd(
         click.echo(f"\nOutput: {out}/")
 
     # Create tarball if requested (only if not using workspace)
-    if not ws:
+    effective_tarball = tarball or tarball_only
+    if not ws and effective_tarball:
+        import shutil
+
         cmd = f"text-fetch fetch --config-file {config_source} --out {out}"
         handle_tarball_creation(
             output_dir=out,
-            tarball=tarball,
+            tarball=True,
             tarball_name=tarball_name,
             stats=stats,
             search_config_dict=search_config.to_dict(),
@@ -487,7 +496,31 @@ def unified_fetch_cmd(
             source="unified",
             verbose=verbose,
         )
-    elif tarball:
+
+        # If --tarball-only, remove raw XML directories to save space
+        if tarball_only:
+            out_path = Path(out)
+            removed_size = 0
+            for source_dir in effective_sources:
+                source_path = out_path / source_dir
+                if source_path.exists():
+                    # Calculate size before removal
+                    for f in source_path.rglob("*"):
+                        if f.is_file():
+                            removed_size += f.stat().st_size
+                    shutil.rmtree(source_path)
+            # Also remove seeds/expanded if present
+            for subdir in ["seeds", "expanded"]:
+                subdir_path = out_path / subdir
+                if subdir_path.exists():
+                    for f in subdir_path.rglob("*"):
+                        if f.is_file():
+                            removed_size += f.stat().st_size
+                    shutil.rmtree(subdir_path)
+            if removed_size > 0:
+                saved_mb = removed_size / (1024 * 1024)
+                click.echo(f"Removed raw XML files (saved {saved_mb:.1f} MB)")
+    elif ws and (tarball or tarball_only):
         click.echo(
             "Note: Use 'text-fetch workspace build' to create tarball " "from workspace"
         )
@@ -577,6 +610,40 @@ def _display_dry_run_report(
                 click.echo(f"  Depth {depth} (seeds): {count:,}")
             else:
                 click.echo(f"  Depth {depth} ({ltype}): {count:,}")
+
+    # Resource estimates
+    seeds_with_pmcid = seed_stats.get("with_pmcid", 0)
+    total_papers = seeds_with_pmcid + total_unique
+
+    # Average JATS XML size: ~150 KB, compression ratio: ~10:1
+    avg_xml_size_kb = 150
+    compression_ratio = 10
+    storage_mb = (total_papers * avg_xml_size_kb) / 1024
+    compressed_mb = storage_mb / compression_ratio
+
+    # Download time estimate: depends on API key
+    # Without API key: ~3 req/sec, with key: ~9 req/sec
+    # Add overhead for network latency: effective ~2 req/sec without, ~6 with
+    if api_key_configured:
+        req_per_sec = 6
+        rate_note = "with API key"
+    else:
+        req_per_sec = 2
+        rate_note = "without API key"
+
+    download_minutes = total_papers / req_per_sec / 60
+
+    click.echo("\nRESOURCE ESTIMATE")
+    click.echo(f"  Papers to download: {total_papers:,}")
+    click.echo(f"  Estimated storage (raw XML): ~{storage_mb:.0f} MB")
+    click.echo(f"  Estimated storage (tarball): ~{compressed_mb:.0f} MB")
+    click.echo(f"  Estimated download time: ~{download_minutes:.0f} min ({rate_note})")
+
+    # API key recommendation
+    if not api_key_configured:
+        click.echo()
+        click.echo("  ⚠ TIP: Configure an NCBI API key for 3x faster downloads")
+        click.echo("    Get one at: https://www.ncbi.nlm.nih.gov/account/settings/")
 
     # Show plan save info
     plan_path = expansion.get("plan_saved")
