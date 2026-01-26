@@ -229,18 +229,39 @@ def unified_fetch(
             }
 
         # Store expansion stats
+        seeds_fetched = expansion_result.get("seeds_fetched", 0)
+        seeds_valid = expansion_result.get("seeds_valid", 0)
+        expanded_fetched = expansion_result.get("expanded_fetched", 0)
+        expanded_valid = expansion_result.get("expanded_valid", 0)
+
         stats["expansion"] = {
             "expand_references": expand_references,
             "expand_citations": expand_citations,
             "expansion_depth": expansion_depth,
-            "seeds_fetched": expansion_result.get("seeds_fetched", 0),
-            "expanded_fetched": expansion_result.get("expanded_fetched", 0),
+            "seeds_fetched": seeds_fetched,
+            "expanded_fetched": expanded_fetched,
             "total_unique": expansion_result.get("total_unique", 0),
         }
 
-        # Add expansion stats to totals
-        stats["total_fetched"] += expansion_result.get("expanded_fetched", 0)
-        stats["total_valid"] += expansion_result.get("expanded_valid", 0)
+        # Add expansion stats to totals (seeds + expanded)
+        stats["total_fetched"] = seeds_fetched + expanded_fetched
+        stats["total_valid"] = seeds_valid + expanded_valid
+        stats["total_incomplete"] = expansion_result.get(
+            "seeds_incomplete", 0
+        ) + expansion_result.get("expanded_incomplete", 0)
+        stats["total_errors"] = expansion_result.get(
+            "seeds_errors", 0
+        ) + expansion_result.get("expanded_errors", 0)
+
+        # Populate per_source for consistent display
+        stats["per_source"]["europepmc"] = {
+            "fetched": seeds_fetched + expanded_fetched,
+            "valid": seeds_valid + expanded_valid,
+            "seeds_fetched": seeds_fetched,
+            "seeds_valid": seeds_valid,
+            "expanded_fetched": expanded_fetched,
+            "expanded_valid": expanded_valid,
+        }
 
         return stats
 
@@ -653,8 +674,12 @@ def _handle_europepmc_expansion(
         "seed_stats": seed_stats,
         "seeds_fetched": seed_fetch_stats.get("fetched", 0),
         "seeds_valid": seed_fetch_stats.get("valid", 0),
+        "seeds_incomplete": seed_fetch_stats.get("incomplete", 0),
+        "seeds_errors": seed_fetch_stats.get("errors", 0),
         "expanded_fetched": expanded_fetch_stats.get("fetched", 0),
         "expanded_valid": expanded_fetch_stats.get("valid", 0),
+        "expanded_incomplete": expanded_fetch_stats.get("incomplete", 0),
+        "expanded_errors": expanded_fetch_stats.get("errors", 0),
         "total_unique": len(seed_pmcids) + len(unique_expanded),
         "expansion_stats": expansion_result.expansion_stats,
         "seed_coverage": expansion_result.seed_coverage,
