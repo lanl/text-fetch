@@ -137,22 +137,75 @@ class EuropePMCClient:
         self,
         endpoint: str,
         params: dict[str, Any] | None = None,
+        max_retries: int = 5,
+        retry_delay: float = 30.0,
     ) -> dict[str, Any] | None:
-        """Make API request with rate limiting."""
-        self.limiter.wait()
+        """Make API request with rate limiting and retry for transient errors.
+
+        Args:
+            endpoint: API endpoint path.
+            params: Query parameters.
+            max_retries: Number of retries for transient errors (502, 503, timeout).
+            retry_delay: Seconds to wait between retries.
+
+        Returns:
+            JSON response dict or None on failure.
+        """
+        import time
+
         url = f"{self.BASE_URL}{endpoint}"
 
-        try:
-            resp = self.session.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            result: dict[str, Any] = resp.json()
-            return result
-        except requests.RequestException as e:
-            logger.error("API request failed: %s - %s", url, e)
-            return None
-        except ValueError as e:
-            logger.error("Invalid JSON response: %s", e)
-            return None
+        for attempt in range(max_retries + 1):
+            self.limiter.wait()
+
+            try:
+                resp = self.session.get(url, params=params, timeout=30)
+                resp.raise_for_status()
+                result: dict[str, Any] = resp.json()
+                return result
+
+            except requests.exceptions.HTTPError as e:
+                status_code = e.response.status_code if e.response else 0
+                # Transient errors - retry
+                if status_code in (502, 503, 504) and attempt < max_retries:
+                    logger.warning(
+                        "API returned %d, retrying in %.0fs (%d/%d): %s",
+                        status_code,
+                        retry_delay,
+                        attempt + 1,
+                        max_retries,
+                        url,
+                    )
+                    time.sleep(retry_delay)
+                    continue
+                logger.error("API request failed: %s - %s", url, e)
+                return None
+
+            except (requests.exceptions.Timeout, requests.exceptions.ReadTimeout):
+                if attempt < max_retries:
+                    logger.warning(
+                        "Request timed out, retrying in %.0fs (%d/%d): %s",
+                        retry_delay,
+                        attempt + 1,
+                        max_retries,
+                        url,
+                    )
+                    time.sleep(retry_delay)
+                    continue
+                logger.error(
+                    "API request timed out after %d retries: %s", max_retries, url
+                )
+                return None
+
+            except requests.RequestException as e:
+                logger.error("API request failed: %s - %s", url, e)
+                return None
+
+            except ValueError as e:
+                logger.error("Invalid JSON response: %s", e)
+                return None
+
+        return None
 
     def _request_xml(self, endpoint: str) -> str | None:
         """Make API request expecting XML response."""
