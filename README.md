@@ -1034,10 +1034,21 @@ CANDIDATE ONLY (2,560 papers not in reference):
 Run expansion analysis once, then resume without re-running the ~45-minute expansion:
 
 ```bash
+# Create a search config for Ebola/filovirus vaccine research
+cat > ebola.json << 'EOF'
+{
+  "name": "Filovirus vaccine research",
+  "virus_keywords": ["Filovirus", "Ebolavirus", "Marburg virus"],
+  "disease_keywords": ["Ebola hemorrhagic fever"],
+  "vaccine_keywords": ["vaccine", "immunization"],
+  "date_range": {"start": "2021/01/25", "end": "2026/01/25"}
+}
+EOF
+
 # Step 1: Run dry-run to preview expansion and save the plan
-# Use --max-expansion all to get full expansion statistics
+# Defaults: --max-results all (unlimited seeds), --max-expansion all (unlimited expanded)
 uv run text-fetch fetch --config-file ebola.json --sources europepmc \
-    --expand --max-expansion all --dry-run --out ./output
+    --expand --dry-run --out ./output
 
 # Shows dry-run report:
 # ═══════════════════════════════════════════════════════════════════
