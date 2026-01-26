@@ -37,8 +37,8 @@ from ._common import handle_tarball_creation
 @click.option("--no-dedupe", is_flag=True, help="Disable DOI deduplication")
 @click.option(
     "--max-results",
-    default=None,
-    help="Max results per source (number or 'all' for unlimited)",
+    default="all",
+    help="Max results per source (number or 'all' for unlimited, default: all)",
 )
 @click.option(
     "--resume",
@@ -73,9 +73,8 @@ from ._common import handle_tarball_creation
 )
 @click.option(
     "--max-expansion",
-    type=int,
-    default=0,
-    help="Max expanded papers (0=unlimited, default: 0)",
+    default="all",
+    help="Max expanded papers (number or 'all' for unlimited, default: all)",
 )
 @click.option(
     "--dry-run",
@@ -115,7 +114,7 @@ def unified_fetch_cmd(
     expand_citations: bool,
     expand: bool,
     expansion_depth: int,
-    max_expansion: int,
+    max_expansion: str,
     dry_run: bool,
     yes: bool,
     from_plan: str | None,
@@ -280,7 +279,20 @@ def unified_fetch_cmd(
     do_expand_refs = expand_references or expand
     do_expand_cites = expand_citations or expand
     has_expansion = do_expand_refs or do_expand_cites
-    effective_max_expansion = max_expansion if max_expansion > 0 else None
+
+    # Parse max_expansion (can be "all" or a number)
+    if max_expansion.lower() == "all":
+        effective_max_expansion = None  # None = unlimited
+    else:
+        try:
+            effective_max_expansion = int(max_expansion)
+            if effective_max_expansion <= 0:
+                effective_max_expansion = None
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid --max-expansion value: {max_expansion}. "
+                "Use a number or 'all' for unlimited."
+            ) from None
 
     # Show config summary
     click.echo(f"Config: {config_source}")
@@ -300,8 +312,8 @@ def unified_fetch_cmd(
         if do_expand_cites:
             exp_dirs.append("citations")
         click.echo(f"Expansion: {' + '.join(exp_dirs)} (depth {expansion_depth})")
-        if effective_max_expansion:
-            click.echo(f"Max expansion: {effective_max_expansion}")
+        max_exp_display = effective_max_expansion if effective_max_expansion else "all"
+        click.echo(f"Max expansion: {max_exp_display}")
         if dry_run:
             click.echo("Mode: DRY-RUN (preview only)")
     click.echo()
@@ -538,19 +550,19 @@ def _display_dry_run_report(
     cites_found = exp_stats.get("citations_found", 0)
     total_unique = exp_stats.get("total_unique", 0)
     dupes = exp_stats.get("duplicates_skipped", 0)
+    truncated = exp_stats.get("truncated_by_max", 0)
+    no_usable_id = exp_stats.get("no_usable_id", 0)
 
     total_raw = refs_found + cites_found
-    # Papers without usable IDs or cross-overlaps
-    unaccounted = total_raw - total_unique - dupes
-    if unaccounted < 0:
-        unaccounted = 0
 
     click.echo(f"  References discovered: {refs_found:,}")
     click.echo(f"  Citations discovered: {cites_found:,}")
     click.echo(f"  Total discovered: {total_raw:,}")
     click.echo(f"  - Duplicates (same paper): {dupes:,}")
-    if unaccounted > 0:
-        click.echo(f"  - No usable ID: ~{unaccounted:,}")
+    if no_usable_id > 0:
+        click.echo(f"  - No usable ID: {no_usable_id:,}")
+    if truncated > 0:
+        click.echo(f"  - Truncated by max_expansion: {truncated:,}")
     click.echo(f"  = Unique expanded: {total_unique:,}")
 
     # Layer breakdown
@@ -583,7 +595,7 @@ def _handle_from_plan(
     workspace: str | None,
     email: str | None,
     api_key: str | None,
-    max_expansion: int,
+    max_expansion: str,
     tarball: bool,
     tarball_name: str | None,
     verbose: bool,
@@ -630,10 +642,23 @@ def _handle_from_plan(
         click.echo("  Citations: YES")
     click.echo(f"  Depth: {exp_cfg.get('depth', 1)}")
     orig_max = exp_cfg.get("max_expansion")
-    click.echo(f"  Max expansion: {orig_max if orig_max else 'unlimited'}")
+    click.echo(f"  Max expansion: {orig_max if orig_max else 'all'}")
+
+    # Parse max_expansion (can be "all" or a number)
+    if max_expansion.lower() == "all":
+        effective_max = None  # None = unlimited
+    else:
+        try:
+            effective_max = int(max_expansion)
+            if effective_max <= 0:
+                effective_max = None
+        except ValueError:
+            raise click.UsageError(
+                f"Invalid --max-expansion value: {max_expansion}. "
+                "Use a number or 'all' for unlimited."
+            ) from None
 
     # Show override if specified
-    effective_max = max_expansion if max_expansion > 0 else None
     if effective_max and effective_max < len(plan.expanded_pmcids):
         click.echo()
         click.echo(
