@@ -1029,6 +1029,62 @@ CANDIDATE ONLY (2,560 papers not in reference):
 - **Experimentation:** Compare corpora from different expansion methods
 - **Quality assurance:** Verify that important papers weren't missed
 
+### Workflow 11: Save Expansion Plan and Resume Later (v0.3.2)
+
+Run expansion analysis once, then resume without re-running the ~45-minute expansion:
+
+```bash
+# Step 1: Run dry-run to preview expansion and save the plan
+# Use --max-expansion all to get full expansion statistics
+uv run text-fetch fetch --config-file ebola.json --sources europepmc \
+    --expand --max-expansion all --dry-run --out ./output
+
+# Shows dry-run report:
+# ═══════════════════════════════════════════════════════════════════
+# EXPANSION DRY-RUN PREVIEW
+# ═══════════════════════════════════════════════════════════════════
+# ...
+# EXPANSION PLAN SAVED
+#   Location: ./output/.expansion_plan.json
+#   To resume later without re-running expansion:
+#     text-fetch fetch --from-plan ./output/.expansion_plan.json --out <dir>
+# ═══════════════════════════════════════════════════════════════════
+# Continue with fetch? [y/N] N
+# Fetch cancelled.
+
+# Step 2: Later, resume from the saved plan
+# Can adjust settings like --max-expansion and --out
+uv run text-fetch fetch --from-plan ./output/.expansion_plan.json \
+    --max-expansion 5000 --out ./final_output
+
+# Or auto-confirm with --yes
+uv run text-fetch fetch --from-plan ./output/.expansion_plan.json \
+    --out ./final_output --yes
+```
+
+**Why this is useful:**
+- **Long analysis time:** Expansion analysis can take 45+ minutes for large queries
+- **Review before committing:** Preview expansion stats, decline, then resume later
+- **Adjust settings:** Change output directory or max_expansion without re-running analysis
+- **Multi-step workflow:** Run analysis overnight, review in the morning, fetch when ready
+
+**Plan file contents:**
+The `.expansion_plan.json` file contains:
+- Seed PMCIDs from the original query
+- Expanded PMCIDs from citation/reference analysis
+- Original expansion configuration (depth, directions)
+- Statistics from the expansion analysis
+- Timestamps and version information
+
+```bash
+# View plan contents
+cat ./output/.expansion_plan.json | jq '.seed_pmcids | length'
+# 127
+
+cat ./output/.expansion_plan.json | jq '.expanded_pmcids | length'
+# 2847
+```
+
 ## Development
 
 ```bash
