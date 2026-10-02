@@ -48,4 +48,4 @@ text-fetch pdf batch --dir ./Manuscripts --out ./output --csv metadata.csv
 
 Example search configuration used with `pubmed_access.py`. The text-fetch JSON format differs slightly.
 
-**Migration:** See `docs/ROADMAP.md` for the text-fetch SearchConfig format.
+**Migration:** See the SearchConfig section of `docs/API_REFERENCE.md` for the text-fetch format.

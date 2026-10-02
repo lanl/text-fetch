@@ -124,11 +124,9 @@ text-fetch/
 ├── CHANGELOG.md              # Version history
 ├── README.md                 # User documentation
 ├── docs/
-│   ├── ROADMAP.md            # Development roadmap
 │   ├── ARCHITECTURE.md       # System design
 │   ├── DEVELOPER_GUIDE.md    # This file
-│   ├── API_REFERENCE.md      # Python API documentation
-│   └── v0.x.x-plan.md        # Implementation plans per version
+│   └── API_REFERENCE.md      # Python API documentation
 ├── tests/                    # Test suite
 │   ├── conftest.py           # Pytest fixtures
 │   └── test_*.py             # Test modules
@@ -336,7 +334,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ```
 feat: add PubMed Central search support
 fix: handle missing DOI in TEI parsing
-docs: update ROADMAP with preprint support
+docs: add preprint usage examples to README
 refactor: extract rate limiter to separate module
 test: add tests for NCBI ID conversion
 chore: update dependencies
@@ -351,7 +349,6 @@ When releasing a new version, update the following files:
 | `pyproject.toml` | `version = "X.Y.Z"` in `[project]` section |
 | `src/text_fetch/__init__.py` | `__version__ = "X.Y.Z"` |
 | `CHANGELOG.md` | Add release notes under `## [X.Y.Z] - YYYY-MM-DD` |
-| `docs/ROADMAP.md` | Mark completed features, update timeline |
 
 **Steps:**
 
@@ -377,22 +374,20 @@ When releasing a new version, update the following files:
    - Refactored to package structure
    ```
 
-4. **Update `docs/ROADMAP.md`** to mark milestone complete
-
-5. **Run pre-commit** to verify:
+4. **Run pre-commit** to verify:
    ```bash
    uv run pre-commit run --all-files
    ```
 
-6. **Commit and tag**:
+5. **Commit and tag**:
    ```bash
-   git add pyproject.toml src/text_fetch/__init__.py CHANGELOG.md docs/ROADMAP.md
+   git add pyproject.toml src/text_fetch/__init__.py CHANGELOG.md
    git commit -m "chore: release v0.1.1"
    git tag v0.1.1
    git push && git push --tags
    ```
 
-7. **Verify** the CLI shows the new version:
+6. **Verify** the CLI shows the new version:
    ```bash
    uv run text-fetch --version
    ```
@@ -432,7 +427,6 @@ To add a new data source (e.g., arXiv):
 4. **Update documentation**:
    - Add to README.md usage section
    - Update ARCHITECTURE.md with data flow
-   - Update ROADMAP.md to mark feature complete
 
 ### Modifying the XSLT Stylesheet
 
@@ -513,5 +507,4 @@ touch tests/__init__.py tests/conftest.py
 ## Related Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System design and data flow
-- [ROADMAP.md](ROADMAP.md) — Planned features and versions
-- [litkit Developer Guide](https://github.com/lanl/litkit) — Downstream project conventions
+- [litkit](https://github.com/lanl/litkit) — Downstream project

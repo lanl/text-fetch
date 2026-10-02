@@ -31,3 +31,6 @@ prompt.md
 .coverage
 output/
 output_v2/
+
+# Developer planning docs (version plans, roadmap, code reviews)
+dev/

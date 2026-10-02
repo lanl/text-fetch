@@ -1319,4 +1319,3 @@ text-fetch compare \
 
 - [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md) — Development setup and conventions
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System architecture overview
-- [ROADMAP.md](ROADMAP.md) — Project roadmap and future plans

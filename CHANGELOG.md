@@ -798,6 +798,3 @@ workspace/
 - pdfminer-six >= 20221105
 - unidecode >= 1.3.0
 - GROBID 0.7.2 (Docker container)
-
-[Unreleased]: https://github.com/lanl/text-fetch/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/lanl/text-fetch/releases/tag/v0.1.0
