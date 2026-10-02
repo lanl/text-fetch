@@ -2,7 +2,7 @@
 
 **Acquire scientific literature for RAG pipelines.**
 
-uv run text-fetch provides a unified interface for acquiring full-text scientific literature from multiple sources and converting it to JATS XML format for downstream RAG (Retrieval-Augmented Generation) pipelines. The output is designed for use with [litkit](https://github.com/lanl/litkit) and [chatty](https://github.com/lanl/chatty).
+text-fetch provides a unified interface for acquiring full-text scientific literature from multiple sources and converting it to JATS XML format for downstream RAG (Retrieval-Augmented Generation) pipelines. The output is designed for use with [litkit](https://github.com/lanl/litkit) and [chatty](https://github.com/lanl/chatty).
 
 ## Installation
 
@@ -28,7 +28,7 @@ uv run text-fetch --version
 
 ## Configuration
 
-uv run text-fetch uses a TOML configuration file. Create `text-fetch.toml` in your project directory or `~/.config/text-fetch/config.toml` for global settings.
+text-fetch uses a TOML configuration file. Create `text-fetch.toml` in your project directory or `~/.config/text-fetch/config.toml` for global settings.
 
 ```toml
 # text-fetch.toml
@@ -1112,7 +1112,6 @@ uv run pre-commit run --all-files
 ## Documentation
 
 - [API_REFERENCE.md](docs/API_REFERENCE.md) - Python API documentation
-- [ROADMAP.md](docs/ROADMAP.md) - Development roadmap and feature status
 - [DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) - Contributing guidelines
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) - System architecture
 
@@ -1123,4 +1122,16 @@ uv run pre-commit run --all-files
 
 ## License
 
-[Insert license information here]
+text-fetch is released under the MIT License. See [LICENSE](LICENSE) for the full text.
+
+**LANL Copyright Assertion O5067**
+
+© 2026. Triad National Security, LLC. All rights reserved.
+This program was produced under U.S. Government contract 89233218CNA000001 for Los Alamos
+National Laboratory (LANL), which is operated by Triad National Security, LLC for the U.S.
+Department of Energy/National Nuclear Security Administration. All rights in the program are
+reserved by Triad National Security, LLC, and the U.S. Department of Energy/National Nuclear
+Security Administration. The Government is granted for itself and others acting on its behalf a
+nonexclusive, paid-up, irrevocable worldwide license in this material to reproduce, prepare
+derivative works, distribute copies to the public, perform publicly and display publicly, and to permit
+others to do so.
