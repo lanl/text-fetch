@@ -24,6 +24,9 @@ pdf_metadata.csv
 # Configuration (contains secrets)
 text-fetch.toml
 
+# Local coding-assistant settings and worktrees (may contain API keys)
+.claude/
+
 # Project-specific
 /pubmed_access.py
 prompt.rtf
