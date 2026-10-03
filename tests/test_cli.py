@@ -462,6 +462,7 @@ class TestUnifiedFetchCommand:
 
         assert result.exit_code == 0
         assert "ERROR" in result.output
+        assert "Total errors: 1" in result.output
 
 
 class TestBiorxivFetchCommand:
@@ -573,6 +574,203 @@ class TestEuropepmcFetchCommand:
         assert result.exit_code == 0
         # The europepmc CLI now shows detailed output format
         assert "SEED PAPERS" in result.output or "Fetch complete" in result.output
+
+    @patch("text_fetch.europepmc.fetch_europepmc")
+    def test_europepmc_fetch_passes_pmcids_through(
+        self,
+        mock_fetch: MagicMock,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """Valid --pmcid values reach the fetcher unchanged.
+
+        Unchanged, so that a checkpoint written by an earlier run of the same
+        command still matches on --resume. Control: main also passed them on.
+        """
+        mock_fetch.return_value = {
+            "articles_found": 2,
+            "full_text_available": 2,
+            "fetched": 2,
+            "valid": 2,
+            "incomplete": 0,
+            "errors": 0,
+        }
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(
+                cli,
+                ["europepmc", "fetch", "--pmcid", "pmc123", "--pmcid", "Pmc456"]
+                + ["--out", "./output"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_fetch.call_args.kwargs["pmcids"] == ["pmc123", "Pmc456"]
+
+    @patch("text_fetch.europepmc.fetch_europepmc")
+    def test_europepmc_fetch_rejects_bad_pmcid(
+        self,
+        mock_fetch: MagicMock,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """A malformed --pmcid is a usage error, and nothing is fetched (#30)."""
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(
+                cli,
+                ["europepmc", "fetch", "--pmcid", "PMCPMC1", "--out", "./output"],
+            )
+
+        assert result.exit_code == 2
+        assert "Invalid PMC ID" in result.output
+        mock_fetch.assert_not_called()
+
+
+class TestEuropepmcExpansionInvalidPmcid:
+    """A malformed PMCID from a batch lookup skips one paper (#30)."""
+
+    def test_bad_lookup_pmcid_does_not_abort(
+        self, runner: CliRunner, tmp_path: Path, requests_mock, monkeypatch
+    ) -> None:
+        """Seeds and good expanded papers are saved; the bad one is skipped."""
+        from urllib.parse import parse_qs, urlsplit
+
+        from text_fetch.europepmc import ExpansionResult
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        records = {
+            "PMC1": {"id": "PMC1", "source": "PMC", "pmcid": "PMC1"},
+            "PMC10": {"id": "10", "source": "MED", "pmid": "10", "pmcid": "PMC10"},
+            "PMC20": {"id": "PMC20", "source": "PMC", "pmcid": "PMC20"},
+        }
+
+        def search(request, context):
+            query = parse_qs(urlsplit(request.url).query)["query"][0]
+            if query.startswith("EXT_ID:"):
+                hits = [
+                    records["PMC10"],
+                    {"id": "11", "source": "MED", "pmid": "11", "pmcid": "PMC11a"},
+                ]
+            elif query.startswith("PMCID:"):
+                hits = [records[query.split(":", 1)[1]]]
+            else:
+                hits = [records["PMC1"]]
+            return {"hitCount": len(hits), "resultList": {"result": hits}}
+
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search", json=search
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<pmc-articleset><article><front><article-meta><title-group>"
+            "<article-title>T</article-title></title-group></article-meta>"
+            "</front></article></pmc-articleset>",
+        )
+        expansion = ExpansionResult(
+            expanded_papers={
+                1: [
+                    {"id": "10", "source": "MED", "_expansion_type": "references"},
+                    {"id": "11", "source": "MED", "_expansion_type": "references"},
+                    # PMC-source record: its id is the PMCID
+                    {"id": "PMC20", "source": "PMC", "_expansion_type": "references"},
+                ]
+            },
+            expansion_stats={"references_found": 3, "total_unique": 3},
+        )
+
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch("text_fetch.europepmc.expand_papers", return_value=expansion),
+        ):
+            result = runner.invoke(
+                cli,
+                ["europepmc", "fetch", "--query", "x", "--expand-references"]
+                + ["--email", "user@example.com", "--out", "o", "--yes"],
+            )
+            files = sorted(p.name for p in Path("o", "valid").iterdir())
+
+        assert result.exit_code == 0, result.output
+        assert files == ["PMC1.xml", "PMC10.xml", "PMC20.xml"]
+        assert "2 downloadable, 1 without full-text" in result.output
+
+    def test_malformed_cli_seed_not_expanded(
+        self, runner: CliRunner, tmp_path: Path, requests_mock, monkeypatch
+    ) -> None:
+        """europepmc fetch drops a seed with a malformed PMCID before expanding."""
+        from text_fetch.europepmc import ExpansionResult
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        hits = [
+            {"id": "PMC1", "source": "PMC", "pmcid": "PMC1"},
+            {"id": "2", "source": "MED", "pmid": "2", "pmcid": "PMC22a"},
+        ]
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={"hitCount": 2, "resultList": {"result": hits}},
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<pmc-articleset><article><front><article-meta><title-group>"
+            "<article-title>T</article-title></title-group></article-meta>"
+            "</front></article></pmc-articleset>",
+        )
+
+        with (
+            runner.isolated_filesystem(temp_dir=tmp_path),
+            patch(
+                "text_fetch.europepmc.expand_papers",
+                return_value=ExpansionResult(),
+            ) as expand,
+        ):
+            result = runner.invoke(
+                cli,
+                ["europepmc", "fetch", "--query", "x", "--expand-references"]
+                + ["--email", "user@example.com", "--out", "o", "--yes"],
+            )
+
+        assert result.exit_code == 0, result.output
+        seeds = expand.call_args.kwargs["seeds"]
+        assert [s.pmcid for s in seeds] == ["PMC1"]
+
+
+class TestFetchFromPlanCommand:
+    """Tests for fetch --from-plan input validation."""
+
+    @patch("text_fetch.fetch.unified_fetch")
+    def test_plan_without_valid_pmcids_is_refused(
+        self,
+        mock_fetch: MagicMock,
+        runner: CliRunner,
+        tmp_path: Path,
+    ) -> None:
+        """A plan with no valid PMC ID exits 1 and fetches nothing (#30).
+
+        An empty ID list must never reach the fetcher as "search everything".
+        """
+        plan = tmp_path / "plan.json"
+        plan.write_text(
+            json.dumps(
+                {
+                    "created_at": "2025-01-25T12:00:00Z",
+                    "text_fetch_version": "0.3.2",
+                    "config_file": "test.json",
+                    "query": "test",
+                    "sources": ["europepmc"],
+                    "seed_pmcids": ["PMC1a"],
+                    "expanded_pmcids": ["PMCPMC2"],
+                }
+            )
+        )
+
+        result = runner.invoke(
+            cli,
+            ["fetch", "--from-plan", str(plan), "--out", str(tmp_path / "o"), "-y"],
+        )
+
+        assert result.exit_code == 1
+        assert isinstance(result.exception, SystemExit)  # a ClickException
+        assert "lists no valid PMC IDs" in result.output
+        assert "LOADING EXPANSION PLAN" not in result.output
+        mock_fetch.assert_not_called()
 
 
 class TestArxivFetchCommand:

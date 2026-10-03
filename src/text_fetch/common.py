@@ -14,6 +14,7 @@ __all__ = [
     "extract_doi_from_text",
     "extract_search_config_from_tarball",
     "find_jats_files",
+    "normalize_pmcid",
     "read_tarball_provenance",
     "sha1_of_bytes",
     "sha1_of_file",
@@ -114,6 +115,25 @@ class RateLimiter:
         if delta < self.min_interval:
             time.sleep(self.min_interval - delta)
         self.last = time.time()
+
+
+_PMCID_RE = re.compile(r"(?:pmc)?([0-9]+)", re.IGNORECASE)
+
+
+def normalize_pmcid(pmcid: str | int) -> str:
+    """Return a PMC ID in canonical form: ``PMC`` followed by digits.
+
+    Accepts ``PMC123``, ``pmc123``, ``Pmc123`` and ``123``, with or without
+    surrounding whitespace.
+
+    Raises:
+        ValueError: If the value is not an optional ``PMC`` prefix (any case)
+            followed by digits, for example ``PMCPMC1`` or ``arxiv:2301.1``.
+    """
+    match = _PMCID_RE.fullmatch(str(pmcid).strip())
+    if not match:
+        raise ValueError(f"Invalid PMC ID: {pmcid!r}")
+    return f"PMC{match.group(1)}"
 
 
 def extract_doi_from_text(text: str) -> str | None:

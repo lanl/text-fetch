@@ -19,7 +19,7 @@ from typing import Any
 
 import requests
 
-from text_fetch.common import RateLimiter
+from text_fetch.common import RateLimiter, normalize_pmcid
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class NCBIClient:
     """
 
     BASE_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-    ID_CONVERTER_URL = "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
+    ID_CONVERTER_URL = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
 
     def __init__(
         self,
@@ -414,23 +414,16 @@ class NCBIClient:
         )
 
         results: dict[str, str | None] = {id_: None for id_ in ids}
+        requested = _index_requested_ids(ids, id_type)
 
         # Parse the response
         records = response.get("records", [])
         for record in records:
-            # Get the input ID
-            if id_type == "pmid":
-                input_id = record.get("pmid")
-            elif id_type == "doi":
-                input_id = record.get("doi")
-            else:
-                input_id = record.get("pmcid")
-
-            if input_id and input_id in results:
-                # Get PMCID if available
-                pmcid = record.get("pmcid")
-                if pmcid:
-                    results[input_id] = pmcid
+            pmcid = record.get("pmcid")
+            if not pmcid:
+                continue
+            for input_id in _match_requested_ids(record, requested, id_type):
+                results[input_id] = pmcid
 
         return results
 
@@ -498,13 +491,14 @@ class NCBIClient:
             doi: {"pmid": None, "pmcid": None} for doi in dois
         }
 
+        requested = _index_requested_ids(dois, "doi")
+
         # Parse the response
         records = response.get("records", [])
         for record in records:
-            doi = record.get("doi")
-            if doi and doi in results:
-                pmid = record.get("pmid")
-                pmcid = record.get("pmcid")
+            pmid = record.get("pmid")
+            pmcid = record.get("pmcid")
+            for doi in _match_requested_ids(record, requested, "doi"):
                 if pmid:
                     results[doi]["pmid"] = str(pmid)
                 if pmcid:
@@ -548,6 +542,7 @@ class NCBIClient:
             None otherwise.
 
         Raises:
+            ValueError: If ``pmcid`` is not a PMC ID (no request is made).
             NCBIRequestError: If the request fails after all retries.
 
         Example:
@@ -556,9 +551,8 @@ class NCBIClient:
             >>> if xml_content:
             ...     print(f"Retrieved {len(xml_content)} bytes of XML")
         """
-        # Normalize PMCID: remove "PMC" prefix if present for the API call
-        is_prefixed = pmcid.upper().startswith("PMC")
-        pmcid_num = pmcid.lstrip("PMC") if is_prefixed else pmcid
+        # efetch takes the numeric part of the PMCID
+        pmcid_num = normalize_pmcid(pmcid)[3:]
 
         params: dict[str, Any] = {
             "db": "pmc",
@@ -634,8 +628,13 @@ class NCBIClient:
         results: dict[str, str | None] = {}
 
         for pmcid in pmcids:
-            # Normalize to include PMC prefix for consistent keys
-            pmcid_norm = pmcid if pmcid.upper().startswith("PMC") else f"PMC{pmcid}"
+            try:
+                # Normalize to include PMC prefix for consistent keys
+                pmcid_norm = normalize_pmcid(pmcid)
+            except ValueError as e:
+                logger.error("Skipping %r: %s", pmcid, e)
+                results[pmcid] = None
+                continue
 
             try:
                 xml_content = self.fetch_pmc_xml(pmcid)
@@ -645,3 +644,45 @@ class NCBIClient:
                 results[pmcid_norm] = None
 
         return results
+
+
+def _id_key(value: str, id_type: str) -> str:
+    """Normalize an identifier so the caller's form matches the converter's."""
+    value = value.strip()
+    if id_type == "doi":
+        return value.lower()
+    if id_type == "pmcid":
+        try:
+            return normalize_pmcid(value)
+        except ValueError:
+            return value.upper()
+    return value
+
+
+def _index_requested_ids(ids: list[str], id_type: str) -> dict[str, list[str]]:
+    """Map each normalized ID to the caller's spellings of it."""
+    by_key: dict[str, list[str]] = {}
+    for id_ in ids:
+        by_key.setdefault(_id_key(id_, id_type), []).append(id_)
+    return by_key
+
+
+def _match_requested_ids(
+    record: dict[str, Any],
+    requested: dict[str, list[str]],
+    id_type: str,
+) -> list[str]:
+    """Return the caller's IDs that an ID converter record answers.
+
+    The converter echoes each input as ``requested-id``. It returns ``pmid``
+    as an integer and may change the case of DOIs and PMCIDs, so IDs are
+    compared after normalization, falling back to the record's own ID field
+    when the echo is missing.
+    """
+    for candidate in (record.get("requested-id"), record.get(id_type)):
+        if candidate is None or candidate == "":
+            continue
+        matches = requested.get(_id_key(str(candidate), id_type))
+        if matches:
+            return matches
+    return []

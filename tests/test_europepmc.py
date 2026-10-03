@@ -2,6 +2,9 @@
 
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+import pytest
 
 from text_fetch.europepmc import (
     EuropePMCArticle,
@@ -91,6 +94,15 @@ class TestEuropePMCClient:
     def test_normalize_pmcid_with_spaces(self) -> None:
         """PMCID with spaces gets trimmed."""
         assert EuropePMCClient.normalize_pmcid("  PMC123456  ") == "PMC123456"
+
+    def test_normalize_pmcid_mixed_case(self) -> None:
+        """Mixed-case prefix is normalized (#30). Control: main also did this."""
+        assert EuropePMCClient.normalize_pmcid("Pmc123456") == "PMC123456"
+
+    def test_normalize_pmcid_rejects_non_pmcid(self) -> None:
+        """A doubled prefix or non-numeric ID is rejected, not passed on (#30)."""
+        with pytest.raises(ValueError, match="Invalid PMC ID"):
+            EuropePMCClient.normalize_pmcid("PMCPMC1")
 
     def test_build_query_author(self) -> None:
         """Query with author."""
@@ -1780,3 +1792,183 @@ class TestFetchEuropepmc:
 
         assert stats["fetched"] == 2
         assert stats["errors"] == 0
+
+    def test_lowercase_pmcids_are_fetched(self, tmp_path: Path, requests_mock) -> None:
+        """--pmcid values in any case are looked up and downloaded (#30).
+
+        Control: main's Europe PMC path already uppercased these.
+        """
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 1,
+                "resultList": {
+                    "result": [
+                        {
+                            "id": "PMC123456",
+                            "source": "PMC",
+                            "pmcid": "PMC123456",
+                            "title": "Test Article",
+                            "isOpenAccess": "Y",
+                            "hasFullText": "Y",
+                        }
+                    ]
+                },
+            },
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<pmc-articleset><article><front><article-meta><title-group>"
+            "<article-title>Test Article</article-title></title-group>"
+            "</article-meta></front></article></pmc-articleset>",
+        )
+
+        stats = fetch_europepmc(
+            pmcids=["pmc123456"],
+            output_dir=tmp_path,
+            email="user@example.com",
+        )
+
+        assert stats["fetched"] == 1
+        assert stats["errors"] == 0
+        searches = [r for r in requests_mock.request_history if "/search" in r.url]
+        assert parse_qs(urlsplit(searches[0].url).query)["query"] == ["PMCID:PMC123456"]
+        efetch = [r for r in requests_mock.request_history if "efetch" in r.url]
+        assert [r.qs["id"] for r in efetch] == [["123456"]]
+        assert (tmp_path / "valid" / "PMC123456.xml").exists()
+
+    def test_invalid_pmcid_is_an_error_not_an_abort(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """A malformed PMCID is counted as an error; the others still download.
+
+        It is never sent to Europe PMC or NCBI (#30).
+        """
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 1,
+                "resultList": {
+                    "result": [
+                        {
+                            "id": "PMC1",
+                            "source": "PMC",
+                            "pmcid": "PMC1",
+                            "title": "Test Article",
+                        }
+                    ]
+                },
+            },
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<pmc-articleset><article><front><article-meta><title-group>"
+            "<article-title>Test Article</article-title></title-group>"
+            "</article-meta></front></article></pmc-articleset>",
+        )
+
+        stats = fetch_europepmc(
+            pmcids=["PMC1", "PMCPMC2"],
+            output_dir=tmp_path,
+            email="user@example.com",
+        )
+
+        assert stats["fetched"] == 1
+        assert stats["errors"] == 1
+        searches = [r for r in requests_mock.request_history if "/search" in r.url]
+        assert len(searches) == 1
+        assert sorted(p.name for p in (tmp_path / "valid").iterdir()) == ["PMC1.xml"]
+
+    def test_unknown_pmcid_is_an_error(self, tmp_path: Path, requests_mock) -> None:
+        """A requested PMCID Europe PMC doesn't know is counted, not dropped."""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={"hitCount": 0, "resultList": {"result": []}},
+        )
+
+        stats = fetch_europepmc(
+            pmcids=["PMC404"], output_dir=tmp_path, email="user@example.com"
+        )
+
+        assert stats["errors"] == 1
+        assert stats["articles_found"] == 0
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            {"id": "X", "source": "MED", "title": "No PMCID"},
+            {"id": "PMC9", "source": "PMC", "pmcid": "PMC9", "title": "Other"},
+        ],
+    )
+    def test_lookup_returning_another_article_is_an_error(
+        self, tmp_path: Path, requests_mock, answer
+    ) -> None:
+        """An answer without the requested PMCID is an error, not a silent drop."""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={"hitCount": 1, "resultList": {"result": [answer]}},
+        )
+
+        stats = fetch_europepmc(
+            pmcids=["PMC2"], output_dir=tmp_path, email="user@example.com"
+        )
+
+        assert stats["errors"] == 1
+        assert stats["articles_found"] == 0
+        assert not (tmp_path / "valid").exists()
+
+    def test_empty_pmcid_list_fetches_nothing(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """pmcids=[] makes no request; it is not a search for everything (#30)."""
+        stats = fetch_europepmc(
+            pmcids=[], output_dir=tmp_path, email="user@example.com"
+        )
+
+        assert requests_mock.call_count == 0
+        assert stats["articles_found"] == 0
+
+    def test_all_invalid_pmcids_leave_workspace_marker(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """If every PMCID is invalid, the workspace's last-fetch date stays put."""
+        from text_fetch.workspace import Workspace
+
+        ws = Workspace.init(tmp_path / "corpus")
+
+        stats = fetch_europepmc(pmcids=["PMCPMC1"], workspace=ws)
+
+        assert stats["errors"] == 1
+        assert requests_mock.call_count == 0
+        assert ws.get_last_fetch_date("europepmc") is None
+
+    def test_search_result_pmcid_normalized(self, tmp_path: Path, requests_mock):
+        """A lowercase PMCID in search results is saved as PMC<digits>.xml."""
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 2,
+                "resultList": {
+                    "result": [
+                        {"id": "1", "source": "MED", "pmcid": "pmc3", "title": "A"},
+                        {"id": "2", "source": "MED", "pmcid": "PMC4x", "title": "B"},
+                    ]
+                },
+            },
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<pmc-articleset><article><front><article-meta><title-group>"
+            "<article-title>A</article-title></title-group>"
+            "</article-meta></front></article></pmc-articleset>",
+        )
+
+        stats = fetch_europepmc(
+            query="test", output_dir=tmp_path, email="user@example.com"
+        )
+
+        assert stats["fetched"] == 1
+        assert stats["errors"] == 1  # PMC4x: counted, never requested
+        assert sorted(p.name for p in (tmp_path / "valid").iterdir()) == ["PMC3.xml"]
+        efetch = [r for r in requests_mock.request_history if "efetch" in r.url]
+        assert [r.qs["id"] for r in efetch] == [["3"]]

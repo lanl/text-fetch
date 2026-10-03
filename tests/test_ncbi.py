@@ -6,6 +6,21 @@ import pytest
 import requests_mock as rm
 from text_fetch.ncbi import NCBIClient, NCBIError, NCBIRequestError
 
+IDCONV_URL = "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
+EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+
+def idconv_record(pmid: int, pmcid: str | None = None, **extra: object) -> dict:
+    """ID converter record shaped like the live API's.
+
+    The live API returns ``pmid`` as an integer and echoes the caller's ID as
+    the string ``requested-id``; records without full text have no ``pmcid``.
+    """
+    record: dict = {"pmid": pmid, "requested-id": str(pmid), **extra}
+    if pmcid:
+        record["pmcid"] = pmcid
+    return record
+
 
 class TestNCBIClientInit:
     """Tests for NCBIClient initialization."""
@@ -401,11 +416,11 @@ class TestNCBIClientConvertIds:
     def test_convert_ids_basic(self, requests_mock: rm.Mocker):
         """convert_ids maps PMIDs to PMCIDs."""
         requests_mock.get(
-            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            IDCONV_URL,
             json={
                 "records": [
-                    {"pmid": "12345", "pmcid": "PMC111111"},
-                    {"pmid": "67890", "pmcid": "PMC222222"},
+                    idconv_record(12345, "PMC111111"),
+                    idconv_record(67890, "PMC222222"),
                 ]
             },
         )
@@ -418,11 +433,11 @@ class TestNCBIClientConvertIds:
     def test_convert_ids_partial(self, requests_mock: rm.Mocker):
         """convert_ids returns None for IDs without PMCIDs."""
         requests_mock.get(
-            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            IDCONV_URL,
             json={
                 "records": [
-                    {"pmid": "12345", "pmcid": "PMC111111"},
-                    {"pmid": "67890"},  # No PMCID
+                    idconv_record(12345, "PMC111111"),
+                    idconv_record(67890),  # No PMCID
                 ]
             },
         )
@@ -447,22 +462,19 @@ class TestNCBIClientConvertIds:
 
         # Mock should be called twice
         requests_mock.get(
-            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            IDCONV_URL,
             [
                 # First batch: 200 IDs
                 {
                     "json": {
-                        "records": [
-                            {"pmid": str(i), "pmcid": f"PMC{i}"} for i in range(200)
-                        ]
+                        "records": [idconv_record(i, f"PMC{i}") for i in range(200)]
                     }
                 },
                 # Second batch: 50 IDs
                 {
                     "json": {
                         "records": [
-                            {"pmid": str(i), "pmcid": f"PMC{i}"}
-                            for i in range(200, 250)
+                            idconv_record(i, f"PMC{i}") for i in range(200, 250)
                         ]
                     }
                 },
@@ -474,13 +486,13 @@ class TestNCBIClientConvertIds:
 
         # Should have made 2 requests
         assert requests_mock.call_count == 2
-        # Should have all 250 results
-        assert len(result) == 250
+        # Should have all 250 results, each matched to its PMCID
+        assert result == {str(i): f"PMC{i}" for i in range(250)}
 
     def test_convert_ids_sends_correct_params(self, requests_mock: rm.Mocker):
         """convert_ids sends correct parameters."""
         requests_mock.get(
-            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            IDCONV_URL,
             json={"records": []},
         )
 
@@ -492,6 +504,115 @@ class TestNCBIClientConvertIds:
         assert "idtype=pmid" in history.url
         assert "format=json" in history.url
 
+    def test_convert_ids_matches_integer_pmid(self, requests_mock: rm.Mocker):
+        """The live converter returns pmid as an integer; it still matches (#1)."""
+        requests_mock.get(
+            IDCONV_URL,
+            json={
+                "status": "ok",
+                "records": [
+                    {
+                        "doi": "10.1093/nar/gks1195",
+                        "pmcid": "PMC3531190",
+                        "pmid": 23193287,
+                        "requested-id": "23193287",
+                    }
+                ],
+            },
+        )
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.get_pmcids(["23193287"])
+
+        assert result == {"23193287": "PMC3531190"}
+
+    def test_convert_ids_without_requested_id_echo(self, requests_mock: rm.Mocker):
+        """Without requested-id, an integer pmid is matched as a string."""
+        requests_mock.get(
+            IDCONV_URL,
+            json={"records": [{"pmid": 23193287, "pmcid": "PMC3531190"}]},
+        )
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.convert_ids(["23193287", "11111111"])
+
+        assert result == {"23193287": "PMC3531190", "11111111": None}
+
+    def test_convert_ids_matches_on_requested_id(self, requests_mock: rm.Mocker):
+        """requested-id alone identifies the input when the ID field is absent."""
+        requests_mock.get(
+            IDCONV_URL,
+            json={"records": [{"pmcid": "PMC3531190", "requested-id": "23193287"}]},
+        )
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.convert_ids(["23193287"])
+
+        assert result == {"23193287": "PMC3531190"}
+
+    def test_convert_ids_by_pmcid_ignores_case(self, requests_mock: rm.Mocker):
+        """PMCID input in lowercase matches the converter's uppercase record."""
+        requests_mock.get(
+            IDCONV_URL,
+            json={"records": [{"pmid": 23193287, "pmcid": "PMC3531190"}]},
+        )
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.convert_ids(["pmc3531190"], id_type="pmcid")
+
+        assert result == {"pmc3531190": "PMC3531190"}
+
+    def test_convert_ids_uses_current_endpoint(self, requests_mock: rm.Mocker):
+        """Requests go to the current ID converter URL, not the redirected one."""
+        requests_mock.get(IDCONV_URL, json={"records": []})
+
+        with NCBIClient(email="user@example.com") as client:
+            client.convert_ids(["123"])
+
+        assert requests_mock.call_count == 1
+        assert requests_mock.request_history[0].url.startswith(
+            "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/?"
+        )
+
+
+class TestNCBIClientConvertDoiToIds:
+    """Tests for convert_doi_to_ids."""
+
+    def test_doi_case_differs_from_record(self, requests_mock: rm.Mocker):
+        """The converter returns its own DOI case; the caller's DOI still matches."""
+        requests_mock.get(
+            IDCONV_URL,
+            json={
+                "records": [
+                    {
+                        "doi": "10.1093/nar/gks1195",
+                        "pmcid": "PMC3531190",
+                        "pmid": 23193287,
+                        "requested-id": "10.1093/NAR/GKS1195",
+                    }
+                ]
+            },
+        )
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.convert_doi_to_ids(["10.1093/NAR/GKS1195"])
+
+        assert result == {
+            "10.1093/NAR/GKS1195": {"pmid": "23193287", "pmcid": "PMC3531190"}
+        }
+
+    def test_doi_without_requested_id_echo(self, requests_mock: rm.Mocker):
+        """Without requested-id, the record's DOI is compared case-insensitively."""
+        requests_mock.get(
+            IDCONV_URL,
+            json={"records": [{"doi": "10.1093/nar/gks1195", "pmid": 23193287}]},
+        )
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.convert_doi_to_ids(["10.1093/NAR/gks1195"])
+
+        assert result == {"10.1093/NAR/gks1195": {"pmid": "23193287", "pmcid": None}}
+
 
 class TestNCBIClientGetPmcids:
     """Tests for get_pmcids convenience method."""
@@ -499,12 +620,12 @@ class TestNCBIClientGetPmcids:
     def test_get_pmcids_filters_none(self, requests_mock: rm.Mocker):
         """get_pmcids only returns PMIDs with PMCIDs."""
         requests_mock.get(
-            "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/",
+            IDCONV_URL,
             json={
                 "records": [
-                    {"pmid": "111", "pmcid": "PMC111"},
-                    {"pmid": "222"},  # No PMCID
-                    {"pmid": "333", "pmcid": "PMC333"},
+                    idconv_record(111, "PMC111"),
+                    idconv_record(222),  # No PMCID
+                    idconv_record(333, "PMC333"),
                 ]
             },
         )
@@ -583,6 +704,30 @@ class TestNCBIClientFetchPmcXml:
         # Should use ID as-is
         history = requests_mock.request_history[0]
         assert "id=7012345" in history.url
+
+    @pytest.mark.parametrize(
+        "pmcid", ["PMC7012345", "pmc7012345", "Pmc7012345", " PMC7012345 "]
+    )
+    def test_fetch_pmc_xml_prefix_any_case(self, requests_mock: rm.Mocker, pmcid):
+        """The PMC prefix is stripped whatever its case (#30)."""
+        requests_mock.get(EFETCH_URL, text=self.SAMPLE_JATS_XML)
+
+        with NCBIClient(email="user@example.com") as client:
+            result = client.fetch_pmc_xml(pmcid)
+
+        assert result == self.SAMPLE_JATS_XML
+        assert requests_mock.request_history[0].qs["id"] == ["7012345"]
+
+    @pytest.mark.parametrize("pmcid", ["PMCPMC1", "MC12345", "arxiv:2301.12345"])
+    def test_fetch_pmc_xml_rejects_non_pmcid(self, requests_mock: rm.Mocker, pmcid):
+        """IDs that aren't PMC IDs raise before any request (#30)."""
+        with (
+            NCBIClient(email="user@example.com") as client,
+            pytest.raises(ValueError, match="Invalid PMC ID"),
+        ):
+            client.fetch_pmc_xml(pmcid)
+
+        assert requests_mock.call_count == 0
 
     def test_fetch_pmc_xml_empty_response(self, requests_mock: rm.Mocker):
         """Empty response returns None."""
@@ -696,7 +841,7 @@ class TestNCBIClientFetchPmcXml:
             NCBIClient(email="test@example.com") as client,
             pytest.raises(NCBIRequestError, match="HTTP error"),
         ):
-            client.fetch_pmc_xml("invalid")
+            client.fetch_pmc_xml("PMC9999999")
 
     def test_fetch_pmc_xml_http_500_raises(self, requests_mock: rm.Mocker):
         """HTTP 500 error raises after retries."""
@@ -759,6 +904,29 @@ class TestNCBIClientFetchPmcXmlBatch:
         assert "PMC111" in results
         assert "PMC222" in results
         assert "PMC333" in results
+
+    def test_fetch_batch_lowercase_keys(self, requests_mock: rm.Mocker):
+        """Lowercase PMCIDs are fetched by number and keyed in canonical form."""
+        requests_mock.get(EFETCH_URL, text=self.SAMPLE_XML)
+
+        with NCBIClient(email="user@example.com") as client:
+            results = client.fetch_pmc_xml_batch(["pmc111", "Pmc222"])
+
+        assert set(results) == {"PMC111", "PMC222"}
+        assert [r.qs["id"] for r in requests_mock.request_history] == [
+            ["111"],
+            ["222"],
+        ]
+
+    def test_fetch_batch_invalid_id_is_none(self, requests_mock: rm.Mocker):
+        """An invalid ID maps to None, is not requested, and the rest still run."""
+        requests_mock.get(EFETCH_URL, text=self.SAMPLE_XML)
+
+        with NCBIClient(email="user@example.com") as client:
+            results = client.fetch_pmc_xml_batch(["PMCPMC1", "PMC222"])
+
+        assert results == {"PMCPMC1": None, "PMC222": self.SAMPLE_XML}
+        assert requests_mock.call_count == 1
 
     def test_fetch_batch_partial_failure(self, requests_mock: rm.Mocker):
         """Batch fetch handles partial failures gracefully."""
