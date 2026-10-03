@@ -424,10 +424,21 @@ def europepmc_fetch(
                 )
                 click.echo()
 
-            # Process expansion results
-            if expansion_result and expansion_result.total_expanded > 0:
-                # Save expansion manifest
+            # Warn about lists that failed to load, even if nothing was
+            # expanded: a total failure must not look like "no citations"
+            if expansion_result:
+                lookup_failed = len(expansion_result.id_issues.get("lookup_failed", []))
+                if lookup_failed > 0:
+                    click.echo(
+                        f"  ⚠ {lookup_failed:,} citation/reference lists failed to "
+                        "load in full; some papers may be missing"
+                    )
+
+            # Save expansion manifest, also when nothing was expanded, so a
+            # run whose lists all failed says so on disk
+            if expansion_result:
                 output_path = Path(out)
+                output_path.mkdir(parents=True, exist_ok=True)
                 manifest_path = output_path / "expansion_manifest.json"
                 manifest_data = {
                     "expansion_config": expansion_result.config,
@@ -443,6 +454,8 @@ def europepmc_fetch(
                 }
                 manifest_path.write_text(json.dumps(manifest_data, indent=2))
 
+            # Process expansion results
+            if expansion_result and expansion_result.total_expanded > 0:
                 # Get discovered counts by type
                 expanded_refs_discovered = expansion_result.expansion_stats.get(
                     "references_found", 0

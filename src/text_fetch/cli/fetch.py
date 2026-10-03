@@ -471,6 +471,12 @@ def unified_fetch_cmd(
     click.echo(f"Total valid: {stats['total_valid']:,}")
     click.echo(f"Total incomplete: {stats['total_incomplete']:,}")
     click.echo(f"Total errors: {stats.get('total_errors', 0):,}")
+    lookup_failed = (stats.get("expansion") or {}).get("lookup_failed", 0)
+    if lookup_failed > 0:
+        click.echo(
+            f"⚠ {lookup_failed:,} citation/reference lists failed to load in "
+            "full; some expanded papers may be missing"
+        )
     if ws:
         dupe_cnt = stats.get("duplicates_skipped", 0)
         click.echo(f"Duplicates skipped: {dupe_cnt:,}")
@@ -601,6 +607,12 @@ def _display_dry_run_report(
     if truncated > 0:
         click.echo(f"  - Truncated by max_expansion: {truncated:,}")
     click.echo(f"  = Unique expanded: {total_unique:,}")
+    lookup_failed = exp_stats.get("lookup_failed", 0)
+    if lookup_failed > 0:
+        click.echo(
+            f"  ⚠ {lookup_failed:,} citation/reference lists failed to load "
+            "in full; counts above are incomplete"
+        )
 
     # Layer breakdown
     layers = expansion.get("layers", [])
@@ -710,6 +722,19 @@ def _handle_from_plan(
     click.echo(f"Seed papers: {len(plan.seed_pmcids):,}")
     click.echo(f"Expanded papers: {len(plan.expanded_pmcids):,}")
     click.echo(f"Total unique: {plan.total_papers:,}")
+    # Hand-edited or damaged plans may hold anything here; only warn on an
+    # actual count
+    exp_stats = (
+        plan.stats.get("expansion_stats") if isinstance(plan.stats, dict) else None
+    )
+    plan_lookup_failed = (
+        exp_stats.get("lookup_failed") if isinstance(exp_stats, dict) else None
+    )
+    if isinstance(plan_lookup_failed, int) and plan_lookup_failed > 0:
+        click.echo(
+            f"⚠ {plan_lookup_failed:,} citation/reference lists failed to load in "
+            "full when this plan was made; some papers may be missing from it"
+        )
 
     # Show expansion config
     exp_cfg = plan.expansion_config

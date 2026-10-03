@@ -257,6 +257,9 @@ def unified_fetch(
             "seeds_fetched": seeds_fetched,
             "expanded_fetched": expanded_fetched,
             "total_unique": expansion_result.get("total_unique", 0),
+            "lookup_failed": expansion_result.get("expansion_stats", {}).get(
+                "lookup_failed", 0
+            ),
         }
 
         # Add expansion stats to totals (seeds + expanded)

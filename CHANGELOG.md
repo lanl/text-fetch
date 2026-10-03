@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   received an empty ID list, treated it as "no list given", and searched for every
   open-access article with full text. `fetch_europepmc(pmcids=[])` now fetches
   nothing, and `fetch --from-plan` refuses a plan that lists no valid PMC IDs.
+- **Citation expansion found nothing** - Europe PMC answers the
+  `/{source}/{id}/citations/{page}/{pageSize}/json` form with 404, so every
+  `--expand`, `--expand-citations` and `--expand-references` run reported 0
+  expanded papers. Citations and references now use
+  `/{source}/{id}/citations?page=&pageSize=&format=json` and page by `hitCount`.
+  PMC IDs keep their prefix (`/PMC/PMC123/...`; `/PMC/123/...` finds nothing),
+  preprints and other sources are looked up under their own ID (`/PPR/PPR123/...`),
+  and `get_full_text_xml` uses `/PMC123/fullTextXML`. A list that fails part way
+  (a failed page, or fewer items than `hitCount`) is no longer passed off as
+  complete: expansion keeps what arrived, and both `europepmc fetch` and `fetch`
+  print how many lists failed to load, including when every list failed.
+  `get_all_citations` and `get_all_references` raise `IncompleteListError` (with
+  the items read so far) instead of returning a partial list.
+- **Seeds counted as expanded papers** - expansion keyed seeds by DOI but citation
+  records by PMID, so a seed cited by another seed was counted again as "expanded",
+  could use up `--max-expansion` and push out new papers, and was expanded again
+  at depth 2. Papers now match on any identifier (DOI, PMCID, PMID or
+  `source:id`). Papers dropped by `--max-expansion` are no longer counted as
+  duplicates, and no further lists are downloaded once the limit is reached.
 
 ### Performance
 - **Batch PMCID Lookup** - 6× faster PMCID resolution during citation expansion

@@ -10,6 +10,7 @@ from text_fetch.europepmc import (
     EuropePMCArticle,
     EuropePMCClient,
     ExpansionResult,
+    IncompleteListError,
     expand_papers,
     fetch_europepmc,
 )
@@ -333,8 +334,8 @@ class TestEuropePMCClient:
         """get_full_text_xml returns XML content."""
         xml_content = '<?xml version="1.0"?><article>Test</article>'
         url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-        # API endpoint uses numeric ID without PMC prefix
-        requests_mock.get(f"{url}/PMC/123456/fullTextXML", text=xml_content)
+        # Endpoint is /{PMCID}/fullTextXML, with the PMC prefix
+        requests_mock.get(f"{url}/PMC123456/fullTextXML", text=xml_content)
 
         client = EuropePMCClient()
         result = client.get_full_text_xml("PMC123456")
@@ -345,8 +346,8 @@ class TestEuropePMCClient:
         """get_full_text_xml normalizes PMCID."""
         xml_content = "<article>Test</article>"
         url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-        # API endpoint uses numeric ID without PMC prefix
-        requests_mock.get(f"{url}/PMC/123456/fullTextXML", text=xml_content)
+        # Endpoint is /{PMCID}/fullTextXML, with the PMC prefix
+        requests_mock.get(f"{url}/PMC123456/fullTextXML", text=xml_content)
 
         client = EuropePMCClient()
         result = client.get_full_text_xml("123456")  # Without PMC prefix
@@ -356,8 +357,8 @@ class TestEuropePMCClient:
     def test_get_full_text_xml_error(self, requests_mock) -> None:
         """get_full_text_xml returns None on error."""
         url = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-        # API endpoint uses numeric ID without PMC prefix
-        requests_mock.get(f"{url}/PMC/123456/fullTextXML", status_code=404)
+        # Endpoint is /{PMCID}/fullTextXML, with the PMC prefix
+        requests_mock.get(f"{url}/PMC123456/fullTextXML", status_code=404)
 
         client = EuropePMCClient()
         result = client.get_full_text_xml("PMC123456")
@@ -539,7 +540,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/32487503/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/32487503/citations?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -551,7 +552,7 @@ class TestEuropePMCClient:
         assert citations[0]["title"] == "Citing Paper 1"
 
     def test_get_citations_normalizes_pmcid(self, requests_mock) -> None:
-        """get_citations removes PMC prefix from PMCID."""
+        """get_citations keeps the PMC prefix (without it the API finds nothing)."""
         response = {
             "hitCount": 1,
             "citationList": {
@@ -560,9 +561,8 @@ class TestEuropePMCClient:
                 ]
             },
         }
-        # Note: endpoint should NOT have PMC prefix
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/7343657/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC7343657/citations?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -579,7 +579,7 @@ class TestEuropePMCClient:
             "citationList": {},
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/99999999/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/99999999/citations?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -598,7 +598,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -612,7 +612,7 @@ class TestEuropePMCClient:
     def test_get_citations_api_error(self, requests_mock) -> None:
         """get_citations returns empty on API error."""
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations?page=1&pageSize=1000&format=json",
             status_code=500,
         )
 
@@ -644,7 +644,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/32487503/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/32487503/references?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -656,7 +656,7 @@ class TestEuropePMCClient:
         assert references[0]["title"] == "Referenced Paper 1"
 
     def test_get_references_normalizes_pmcid(self, requests_mock) -> None:
-        """get_references removes PMC prefix from PMCID."""
+        """get_references keeps the PMC prefix (without it the API finds nothing)."""
         response = {
             "hitCount": 1,
             "referenceList": {
@@ -666,7 +666,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/7343657/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC7343657/references?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -683,7 +683,7 @@ class TestEuropePMCClient:
             "referenceList": {},
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/99999999/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/99999999/references?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -702,7 +702,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -716,7 +716,7 @@ class TestEuropePMCClient:
     def test_get_references_api_error(self, requests_mock) -> None:
         """get_references returns empty on API error."""
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references?page=1&pageSize=1000&format=json",
             status_code=500,
         )
 
@@ -753,15 +753,15 @@ class TestEuropePMCClient:
             "citationList": {},
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations?page=1&pageSize=1000&format=json",
             json=response1,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/2/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations?page=2&pageSize=1000&format=json",
             json=response2,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/3/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations?page=3&pageSize=1000&format=json",
             json=response3,
         )
 
@@ -782,7 +782,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/citations?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -818,15 +818,15 @@ class TestEuropePMCClient:
             "referenceList": {},
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references?page=1&pageSize=1000&format=json",
             json=response1,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/2/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references?page=2&pageSize=1000&format=json",
             json=response2,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/3/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references?page=3&pageSize=1000&format=json",
             json=response3,
         )
 
@@ -847,7 +847,7 @@ class TestEuropePMCClient:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/MED/12345678/references?page=1&pageSize=1000&format=json",
             json=response,
         )
 
@@ -855,6 +855,196 @@ class TestEuropePMCClient:
         references = client.get_all_references("MED", "12345678", max_results=5)
 
         assert len(references) == 5
+
+
+class TestLinkedPapersEndpoint:
+    """Citations/references use /{source}/{id}/{kind}?page=&pageSize=&format=json."""
+
+    BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+
+    @pytest.mark.parametrize("kind", ["citations", "references"])
+    def test_query_string_form(self, requests_mock, epmc_links_payload, kind) -> None:
+        """One request in the query-string form; the path form returns 404 (#2)."""
+        requests_mock.get(
+            f"{self.BASE}/MED/32487503/{kind}",
+            json=epmc_links_payload(kind, [("MED", "111"), ("PPR", "PPR222")]),
+        )
+
+        client = EuropePMCClient()
+        get = client.get_citations if kind == "citations" else client.get_references
+        items, total = get("MED", "32487503")
+
+        assert [i["id"] for i in items] == ["111", "PPR222"]
+        assert total == 2
+        assert requests_mock.call_count == 1
+        request = requests_mock.request_history[0]
+        assert request.path.endswith(f"/med/32487503/{kind}")
+        assert parse_qs(urlsplit(request.url).query) == {
+            "page": ["1"],
+            "pageSize": ["1000"],
+            "format": ["json"],
+        }
+
+    @pytest.mark.parametrize("pmcid", ["PMC3531190", "pmc3531190", "3531190"])
+    def test_pmc_source_keeps_prefix(self, requests_mock, epmc_links_payload, pmcid):
+        """PMC lookups use /PMC/PMC123/...; /PMC/123/... returns no hits."""
+        requests_mock.get(
+            f"{self.BASE}/PMC/PMC3531190/citations",
+            json=epmc_links_payload("citations", [("MED", "111")]),
+        )
+
+        items, total = EuropePMCClient().get_citations("PMC", pmcid)
+
+        assert total == 1
+        assert len(items) == 1
+        # requests_mock matches paths case-insensitively; check the real URL
+        url = requests_mock.request_history[0].url
+        assert urlsplit(url).path.endswith("/PMC/PMC3531190/citations")
+
+    @pytest.mark.parametrize(
+        ("hit_count", "expected_pages"),
+        [(0, 1), (1, 1), (999, 1), (1000, 1), (1001, 2), (2000, 2), (2067, 3)],
+    )
+    def test_get_all_pages_by_hit_count(
+        self, requests_mock, epmc_links_payload, hit_count, expected_pages
+    ) -> None:
+        """Every page up to hitCount is fetched, and no more (#2)."""
+
+        def page(request, context):
+            n = int(parse_qs(urlsplit(request.url).query)["page"][0])
+            start = (n - 1) * 1000
+            ids = range(start, min(start + 1000, hit_count))
+            return epmc_links_payload(
+                "citations", [("MED", str(i)) for i in ids], hit_count=hit_count
+            )
+
+        requests_mock.get(f"{self.BASE}/MED/1/citations", json=page)
+
+        items = EuropePMCClient().get_all_citations("MED", "1")
+
+        assert [i["id"] for i in items] == [str(i) for i in range(hit_count)]
+        assert requests_mock.call_count == expected_pages
+        pages = [
+            parse_qs(urlsplit(r.url).query)["page"][0]
+            for r in requests_mock.request_history
+        ]
+        assert pages == [str(n) for n in range(1, expected_pages + 1)]
+
+    def test_get_all_without_hit_count_stops_on_short_page(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """Without hitCount, paging continues while pages are full."""
+
+        def page(request, context):
+            n = int(parse_qs(urlsplit(request.url).query)["page"][0])
+            count = 1000 if n == 1 else 5
+            payload = epmc_links_payload(
+                "references", [("MED", f"{n}-{i}") for i in range(count)]
+            )
+            del payload["hitCount"]
+            return payload
+
+        requests_mock.get(f"{self.BASE}/MED/1/references", json=page)
+
+        items = EuropePMCClient().get_all_references("MED", "1")
+
+        assert len(items) == 1005
+        assert requests_mock.call_count == 2
+
+    @pytest.mark.parametrize("hit_count", ["2", "abc", None, float("inf")])
+    def test_hit_count_types(self, requests_mock, epmc_links_payload, hit_count):
+        """A string hitCount is parsed; junk or null means "unknown", no crash."""
+        payload = epmc_links_payload("citations", [("MED", "1"), ("MED", "2")])
+        payload["hitCount"] = hit_count
+        requests_mock.get(f"{self.BASE}/MED/1/citations", json=payload)
+
+        items, total = EuropePMCClient().get_citations("MED", "1")
+
+        assert len(items) == 2
+        assert total == (2 if hit_count == "2" else None)
+
+    def test_page_size_capped_at_api_maximum(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """A page size above the API's maximum of 1000 is sent as 1000."""
+        requests_mock.get(
+            f"{self.BASE}/MED/1/references",
+            json=epmc_links_payload("references", []),
+        )
+
+        EuropePMCClient().get_references("MED", "1", page_size=5000)
+
+        query = parse_qs(urlsplit(requests_mock.request_history[0].url).query)
+        assert query["pageSize"] == ["1000"]
+
+    def test_full_text_xml_uses_prefixed_pmcid(self, requests_mock) -> None:
+        """Full text is requested at /PMC123/fullTextXML (#2)."""
+        requests_mock.get(f"{self.BASE}/PMC3531190/fullTextXML", text="<article/>")
+
+        assert EuropePMCClient().get_full_text_xml("pmc3531190") == "<article/>"
+        assert requests_mock.call_count == 1
+        url = requests_mock.request_history[0].url
+        assert urlsplit(url).path.endswith("/rest/PMC3531190/fullTextXML")
+
+    def test_failed_page_raises_with_partial_items(
+        self, requests_mock, epmc_links_payload, monkeypatch
+    ) -> None:
+        """A failed page 2 of 3 raises; it isn't returned as the whole list."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        def page(request, context):
+            n = int(parse_qs(urlsplit(request.url).query)["page"][0])
+            if n == 2:
+                context.status_code = 404
+                return {}
+            return epmc_links_payload(
+                "citations", [("MED", str(i)) for i in range(1000)], hit_count=2067
+            )
+
+        requests_mock.get(f"{self.BASE}/MED/1/citations", json=page)
+
+        with pytest.raises(IncompleteListError, match="page 2") as info:
+            EuropePMCClient().get_all_citations("MED", "1")
+
+        assert len(info.value.items) == 1000
+        assert requests_mock.call_count == 2
+
+    def test_short_list_against_hit_count_raises(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """An empty page before hitCount items arrived raises."""
+
+        def page(request, context):
+            n = int(parse_qs(urlsplit(request.url).query)["page"][0])
+            records = [("MED", str(i)) for i in range(1000)] if n == 1 else []
+            return epmc_links_payload("citations", records, hit_count=2067)
+
+        requests_mock.get(f"{self.BASE}/MED/1/citations", json=page)
+
+        with pytest.raises(IncompleteListError, match="1000 of 2067"):
+            EuropePMCClient().get_all_citations("MED", "1")
+
+    def test_no_hit_count_paging_is_bounded(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """Without hitCount, full pages forever stop at MAX_LINKED_PAGES."""
+        payload = epmc_links_payload("references", [("MED", "1")] * 1000)
+        del payload["hitCount"]
+
+        def page(request, context):
+            # Fail fast instead of hanging if the cap is ever removed
+            if requests_mock.call_count > 10:
+                raise AssertionError("paging did not stop at MAX_LINKED_PAGES")
+            return payload
+
+        requests_mock.get(f"{self.BASE}/MED/1/references", json=page)
+
+        client = EuropePMCClient()
+        client.MAX_LINKED_PAGES = 3
+        with pytest.raises(IncompleteListError, match="after 3 pages"):
+            client.get_all_references("MED", "1")
+
+        assert requests_mock.call_count == 3
 
 
 class TestBatchLookup:
@@ -1141,11 +1331,11 @@ class TestExpandPapers:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1000&format=json",
             json=refs_response,
         )
 
@@ -1178,11 +1368,11 @@ class TestExpandPapers:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/citations?page=1&pageSize=1&format=json",
             json=cites_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/citations?page=1&pageSize=1000&format=json",
             json=cites_response,
         )
 
@@ -1222,19 +1412,19 @@ class TestExpandPapers:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1000&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/citations?page=1&pageSize=1&format=json",
             json=cites_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/citations/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/citations?page=1&pageSize=1000&format=json",
             json=cites_response,
         )
 
@@ -1266,11 +1456,11 @@ class TestExpandPapers:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1000&format=json",
             json=refs_response,
         )
 
@@ -1305,19 +1495,19 @@ class TestExpandPapers:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111/references/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC111/references?page=1&pageSize=1&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/111/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC111/references?page=1&pageSize=1000&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/222/references/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC222/references?page=1&pageSize=1&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/222/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC222/references?page=1&pageSize=1000&format=json",
             json=refs_response,
         )
 
@@ -1366,11 +1556,11 @@ class TestExpandPapers:
             },
         }
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1&format=json",
             json=refs_response,
         )
         requests_mock.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/123456/references/1/1000/json",
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC/PMC123456/references?page=1&pageSize=1000&format=json",
             json=refs_response,
         )
 
@@ -1389,6 +1579,249 @@ class TestExpandPapers:
         seed_layer = next(lyr for lyr in result.layers if lyr["type"] == "seed")
         assert seed_layer["depth"] == 0
         assert seed_layer["count"] == 1
+
+
+class TestExpansionDedup:
+    """Seeds and already-found papers are recognized by any identifier (#24)."""
+
+    BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+
+    @staticmethod
+    def _seed(pmid: str, doi: str | None = None) -> EuropePMCArticle:
+        return EuropePMCArticle(
+            id=pmid,
+            source="MED",
+            pmid=pmid,
+            pmcid=f"PMC{pmid}",
+            doi=doi or f"10.1000/{pmid}",
+            title=f"Seed {pmid}",
+            authors=[],
+            abstract="",
+            journal="",
+            pub_year=2024,
+            first_publication_date=None,
+            is_open_access=True,
+            has_full_text=True,
+        )
+
+    def _mock_refs(self, requests_mock, build, graph: dict[str, list]) -> None:
+        """Serve references for each "SOURCE/ID" key in graph."""
+        for key, records in graph.items():
+            requests_mock.get(
+                f"{self.BASE}/{key}/references",
+                json=build("references", records),
+            )
+
+    def test_seeds_citing_each_other_are_not_expanded(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """Seeds A and B reference each other and C: only C is expanded."""
+        self._mock_refs(
+            requests_mock,
+            epmc_links_payload,
+            {
+                "MED/111": [("MED", "222"), ("MED", "333")],
+                "MED/222": [("MED", "111")],
+            },
+        )
+
+        result = expand_papers(
+            EuropePMCClient(),
+            [self._seed("111"), self._seed("222")],
+            expand_references=True,
+        )
+
+        assert [p["id"] for p in result.all_papers] == ["333"]
+        assert result.expansion_stats["total_unique"] == 1
+        assert result.expansion_stats["duplicates_skipped"] == 2
+
+    def test_seeds_do_not_use_up_max_expansion(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """With --max-expansion 1, the one new paper is kept, not a seed."""
+        self._mock_refs(
+            requests_mock,
+            epmc_links_payload,
+            {
+                "MED/111": [("MED", "222"), ("MED", "333")],
+                "MED/222": [("MED", "111")],
+            },
+        )
+
+        result = expand_papers(
+            EuropePMCClient(),
+            [self._seed("111"), self._seed("222")],
+            expand_references=True,
+            max_expansion=1,
+        )
+
+        assert [p["id"] for p in result.all_papers] == ["333"]
+
+    def test_seed_matched_by_pmcid_record(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """A PMC-source record of a MED seed (same PMCID) is a duplicate."""
+        self._mock_refs(
+            requests_mock,
+            epmc_links_payload,
+            {
+                "MED/111": [("PMC", "PMC222"), ("MED", "333")],
+                "MED/222": [],
+            },
+        )
+
+        result = expand_papers(
+            EuropePMCClient(),
+            [self._seed("111"), self._seed("222")],
+            expand_references=True,
+        )
+
+        assert [p["id"] for p in result.all_papers] == ["333"]
+        assert result.expansion_stats["duplicates_skipped"] == 1
+
+    def test_preprint_found_twice_is_expanded_once(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """A PPR record cited by two seeds is one expanded paper."""
+        self._mock_refs(
+            requests_mock,
+            epmc_links_payload,
+            {
+                "MED/111": [("PPR", "PPR9")],
+                "MED/222": [("PPR", "PPR9"), ("PPR", "PPR10")],
+            },
+        )
+
+        result = expand_papers(
+            EuropePMCClient(),
+            [self._seed("111"), self._seed("222")],
+            expand_references=True,
+        )
+
+        assert [p["id"] for p in result.all_papers] == ["PPR9", "PPR10"]
+        assert result.expansion_stats["duplicates_skipped"] == 1
+
+    def test_depth_two_skips_seeds_and_uses_source_ids(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """At depth 2, seeds aren't re-expanded and preprints use /PPR/{id}."""
+        self._mock_refs(
+            requests_mock,
+            epmc_links_payload,
+            {
+                "MED/111": [("MED", "333"), ("PPR", "PPR9"), ("PMC", "PMC77")],
+                "MED/333": [("MED", "111"), ("MED", "444")],
+                "PPR/PPR9": [("MED", "555")],
+                "PMC/PMC77": [("MED", "666")],
+            },
+        )
+
+        result = expand_papers(
+            EuropePMCClient(),
+            [self._seed("111")],
+            expand_references=True,
+            depth=2,
+        )
+
+        layers = result.expanded_papers
+        by_depth = {d: [p["id"] for p in ps] for d, ps in layers.items()}
+        assert by_depth == {1: ["333", "PPR9", "PMC77"], 2: ["444", "555", "666"]}
+        assert result.expansion_stats["duplicates_skipped"] == 1
+        paths = [r.path for r in requests_mock.request_history]
+        # Seed: coverage check + full list; each depth-1 paper: full list
+        assert paths == [
+            "/europepmc/webservices/rest/med/111/references",
+            "/europepmc/webservices/rest/med/111/references",
+            "/europepmc/webservices/rest/med/333/references",
+            "/europepmc/webservices/rest/ppr/ppr9/references",
+            "/europepmc/webservices/rest/pmc/pmc77/references",
+        ]
+
+    def test_failed_list_is_reported_and_partial_items_used(
+        self, requests_mock, epmc_links_payload, monkeypatch
+    ) -> None:
+        """A list that fails part way is used as far as it got, and reported."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        def refs(request, context):
+            query = parse_qs(urlsplit(request.url).query)
+            if query["pageSize"] == ["1"]:
+                return epmc_links_payload("references", [("MED", "1")], 1001)
+            if query["page"] == ["2"]:
+                context.status_code = 404
+                return {}
+            records = [("MED", str(10_000 + i)) for i in range(1000)]
+            return epmc_links_payload("references", records, hit_count=1001)
+
+        requests_mock.get(f"{self.BASE}/MED/111/references", json=refs)
+
+        result = expand_papers(
+            EuropePMCClient(), [self._seed("111")], expand_references=True
+        )
+
+        assert result.total_expanded == 1000
+        assert result.id_issues["lookup_failed"] == ["MED/111"]
+        assert result.expansion_stats["lookup_failed"] == 1
+
+    def test_duplicate_record_links_its_other_ids(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """A duplicate's other IDs mark the same paper when it reappears."""
+        requests_mock.get(
+            f"{self.BASE}/MED/111/references",
+            json={
+                "hitCount": 3,
+                "referenceList": {
+                    "reference": [
+                        {"id": "5", "source": "MED"},
+                        # Same paper, now with its DOI
+                        {"id": "5", "source": "MED", "doi": "10.1000/five"},
+                        # Same DOI, no PMID: must still be a duplicate
+                        {"id": "PPR5", "source": "PPR", "doi": "10.1000/FIVE"},
+                    ]
+                },
+            },
+        )
+
+        result = expand_papers(
+            EuropePMCClient(), [self._seed("111")], expand_references=True
+        )
+
+        assert [p["id"] for p in result.all_papers] == ["5"]
+        assert result.expansion_stats["duplicates_skipped"] == 2
+
+    def test_budget_drop_is_not_a_duplicate_and_stops_requests(
+        self, requests_mock, epmc_links_payload
+    ) -> None:
+        """Papers past --max-expansion aren't counted as duplicates or fetched.
+
+        With a budget of 1, X fills it; Y is dropped from the references, and
+        the citation list is not downloaded at all.
+        """
+        self._mock_refs(
+            requests_mock, epmc_links_payload, {"MED/111": [("MED", "1"), ("MED", "2")]}
+        )
+        requests_mock.get(
+            f"{self.BASE}/MED/111/citations",
+            json=epmc_links_payload("citations", [("MED", "2")]),
+        )
+
+        result = expand_papers(
+            EuropePMCClient(),
+            [self._seed("111")],
+            expand_references=True,
+            expand_citations=True,
+            max_expansion=1,
+        )
+
+        assert [p["id"] for p in result.all_papers] == ["1"]
+        assert result.expansion_stats["duplicates_skipped"] == 0
+        full_lists = [
+            r.path
+            for r in requests_mock.request_history
+            if parse_qs(urlsplit(r.url).query)["pageSize"] == ["1000"]
+        ]
+        assert full_lists == ["/europepmc/webservices/rest/med/111/references"]
 
 
 class TestFetchEuropepmc:

@@ -773,6 +773,157 @@ class TestFetchFromPlanCommand:
         mock_fetch.assert_not_called()
 
 
+class TestDryRunReport:
+    """The unified dry-run report shows incomplete expansion lists."""
+
+    @pytest.mark.parametrize(("failed", "shown"), [(0, False), (2, True)])
+    def test_lookup_failures_shown(self, capsys, failed: int, shown: bool) -> None:
+        """A warning appears only when some lists failed to load in full."""
+        from text_fetch.cli.fetch import _display_dry_run_report
+
+        stats = {
+            "expansion_result": {
+                "seed_stats": {"articles_found": 1, "with_pmcid": 1},
+                "expansion_config": {},
+                "seed_coverage": {},
+                "expansion_stats": {"total_unique": 5, "lookup_failed": failed},
+            }
+        }
+
+        _display_dry_run_report(stats, "out", True, False)
+
+        out = capsys.readouterr().out
+        assert ("2 citation/reference lists failed to load" in out) is shown
+
+
+class TestExpansionLookupFailureReported:
+    """Citation/reference lists that fail to load are reported (#2)."""
+
+    BASE = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+    SEED = {"id": "111", "source": "MED", "pmid": "111", "pmcid": "PMC111"}
+
+    def _mock(self, requests_mock, monkeypatch, tmp_path) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        requests_mock.get(
+            f"{self.BASE}/search",
+            json={"hitCount": 1, "resultList": {"result": [self.SEED]}},
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text="<pmc-articleset><article><front><article-meta><title-group>"
+            "<article-title>T</article-title></title-group></article-meta>"
+            "</front></article></pmc-articleset>",
+        )
+        # Every references request fails
+        requests_mock.get(f"{self.BASE}/MED/111/references", status_code=404)
+
+    def test_europepmc_fetch_warns_when_every_list_fails(
+        self, runner: CliRunner, tmp_path: Path, requests_mock, monkeypatch
+    ) -> None:
+        """Nothing expanded because every list failed: the run says so."""
+        self._mock(requests_mock, monkeypatch, tmp_path)
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(
+                cli,
+                ["europepmc", "fetch", "--query", "x", "--expand-references"]
+                + ["--email", "user@example.com", "--out", "o", "--yes"],
+            )
+            manifest = json.loads(Path("o", "expansion_manifest.json").read_text())
+
+        assert result.exit_code == 0, result.output
+        assert "1 citation/reference lists failed to load" in result.output
+        # Recorded on disk too, for unattended runs that don't read stdout
+        assert manifest["id_issues"]["lookup_failed_count"] == 1
+
+    def test_unified_fetch_warns_when_every_list_fails(
+        self, runner: CliRunner, tmp_path: Path, requests_mock, monkeypatch
+    ) -> None:
+        """The unified fetch summary warns too, without --dry-run."""
+        self._mock(requests_mock, monkeypatch, tmp_path)
+        config = tmp_path / "search.json"
+        config.write_text(json.dumps({"author": "x", "sources": ["europepmc"]}))
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(
+                cli,
+                ["fetch", "--config-file", str(config), "--expand-references"]
+                + ["--email", "user@example.com", "--out", "o", "--yes"],
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "1 citation/reference lists failed to load" in result.output
+
+    def test_from_plan_repeats_the_warning(
+        self, runner: CliRunner, tmp_path: Path, requests_mock, monkeypatch
+    ) -> None:
+        """A plan made while lists failed says so when it is fetched later."""
+        self._mock(requests_mock, monkeypatch, tmp_path)
+        config = tmp_path / "search.json"
+        config.write_text(json.dumps({"author": "x", "sources": ["europepmc"]}))
+
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            dry = runner.invoke(
+                cli,
+                ["fetch", "--config-file", str(config), "--expand-references"]
+                + ["--email", "user@example.com", "--out", "o", "--dry-run"],
+                input="n\n",
+            )
+            result = runner.invoke(
+                cli,
+                ["fetch", "--from-plan", "o/.expansion_plan.json", "--out", "o2"]
+                + ["--email", "user@example.com", "--yes"],
+            )
+
+        assert dry.exit_code == 0, dry.output
+        assert result.exit_code == 0, result.output
+        assert "1 citation/reference lists failed to load" in result.output
+
+
+class TestFromPlanMalformedStats:
+    """Odd plan stats never stop a --from-plan fetch."""
+
+    @pytest.mark.parametrize(
+        "stats",
+        [None, {"expansion_stats": None}, {"expansion_stats": []}]
+        + [{"expansion_stats": {"lookup_failed": "2"}}, "x"],
+    )
+    @patch("text_fetch.fetch.unified_fetch")
+    def test_runs_without_warning(
+        self, mock_fetch: MagicMock, runner: CliRunner, tmp_path: Path, stats
+    ) -> None:
+        """No crash and no warning for stats that aren't a proper count."""
+        mock_fetch.return_value = {
+            "total_fetched": 0,
+            "total_valid": 0,
+            "total_incomplete": 0,
+            "total_errors": 0,
+        }
+        plan = tmp_path / "plan.json"
+        plan.write_text(
+            json.dumps(
+                {
+                    "created_at": "2025-01-25T12:00:00Z",
+                    "text_fetch_version": "0.3.2",
+                    "config_file": "test.json",
+                    "query": "test",
+                    "sources": ["europepmc"],
+                    "seed_pmcids": ["PMC1"],
+                    "expanded_pmcids": [],
+                    "stats": stats,
+                }
+            )
+        )
+
+        result = runner.invoke(
+            cli,
+            ["fetch", "--from-plan", str(plan), "--out", str(tmp_path / "o"), "-y"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "failed to load" not in result.output
+
+
 class TestArxivFetchCommand:
     """Tests for arxiv fetch command."""
 
