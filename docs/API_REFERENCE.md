@@ -298,9 +298,9 @@ from text_fetch.europepmc import EuropePMCClient
 
 client = EuropePMCClient()
 
-# Get citations (papers citing this paper)
+# Get citations (papers citing this paper); one page of up to 1000
 citations, total = client.get_citations("MED", "32487503")
-print(f"Found {total} papers citing this article")
+print(f"Found {total} papers citing this article")  # total is None without hitCount
 for cite in citations:
     print(f"  - {cite.get('title')} ({cite.get('pubYear')})")
 
@@ -309,7 +309,13 @@ references, total = client.get_references("MED", "32487503")
 print(f"This paper cites {total} papers")
 
 # Get all with pagination (handles >1000 results)
-all_citations = client.get_all_citations("PMC", "PMC7343657", max_results=5000)
+from text_fetch.europepmc import IncompleteListError
+
+try:
+    all_citations = client.get_all_citations("PMC", "PMC7343657", max_results=5000)
+except IncompleteListError as e:
+    # A page failed or the list ended early; e.items holds what was read
+    all_citations = e.items
 all_references = client.get_all_references("PMC", "PMC7343657")
 ```
 

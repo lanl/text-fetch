@@ -114,3 +114,32 @@ startxref
     pdf_path = tmp_path / "test.pdf"
     pdf_path.write_bytes(pdf_content)
     return pdf_path
+
+
+@pytest.fixture
+def epmc_links_payload():
+    """Build a Europe PMC citations or references response like the live API's.
+
+    ``kind`` is "citations" or "references". Records carry only the fields the
+    live endpoints return for linking (``id``, ``source``, ``title``), with an
+    integer ``hitCount``; they have no ``doi``, ``pmid`` or ``pmcid`` keys.
+    """
+
+    def build(
+        kind: str,
+        records: list[tuple[str, str]],
+        hit_count: int | None = None,
+    ) -> dict:
+        item_key = kind[:-1]
+        items = [
+            {"id": rec_id, "source": source, "title": f"Paper {rec_id}"}
+            for source, rec_id in records
+        ]
+        return {
+            "version": "6.9",
+            "hitCount": len(items) if hit_count is None else hit_count,
+            "request": {"id": "1", "source": "MED", "offSet": 0, "pageSize": 1000},
+            f"{item_key}List": {item_key: items},
+        }
+
+    return build

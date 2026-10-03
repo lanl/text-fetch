@@ -16,6 +16,7 @@ __all__ = [
     "EuropePMCClient",
     "EuropePMCArticle",
     "ExpansionResult",
+    "IncompleteListError",
     "expand_papers",
     "fetch_europepmc",
 ]
@@ -36,6 +37,22 @@ if TYPE_CHECKING:
     from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+class IncompleteListError(RuntimeError):
+    """A citation or reference list could not be read in full.
+
+    Raised when a page request fails, or when pages run out before
+    ``hitCount`` items arrived, so a partial list is never mistaken for the
+    whole one.
+
+    Attributes:
+        items: The items read before the failure.
+    """
+
+    def __init__(self, message: str, items: list[dict]) -> None:
+        super().__init__(message)
+        self.items = items
 
 
 @dataclass
@@ -388,14 +405,10 @@ class EuropePMCClient:
         Returns:
             JATS XML string or None if not available.
         """
-        # Normalize then strip prefix for API endpoint
-        # API expects /PMC/{id}/fullTextXML where id is numeric (no PMC prefix)
+        # Endpoint: /{PMCID}/fullTextXML, with the PMC prefix
+        # (/PMC/{number}/fullTextXML returns 404)
         pmcid = self.normalize_pmcid(pmcid)
-        pmcid_numeric = pmcid[3:]  # Strip "PMC" prefix
-
-        # Endpoint: /{source}/{id}/fullTextXML
-        endpoint = f"/PMC/{pmcid_numeric}/fullTextXML"
-        return self._request_xml(endpoint)
+        return self._request_xml(f"/{pmcid}/fullTextXML")
 
     def get_by_pmcid(self, pmcid: str) -> EuropePMCArticle | None:
         """Fetch article metadata by PMC ID.
@@ -505,36 +518,21 @@ class EuropePMCClient:
         identifier: str,
         page: int = 1,
         page_size: int = 1000,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int | None]:
         """Get papers that cite the given paper.
 
         Args:
             source: Data source (MED, PMC, PPR, etc.).
-            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            identifier: Identifier (PMID, PMCID, PPR ID, etc.).
             page: Page number (1-indexed).
             page_size: Results per page (max 1000).
 
         Returns:
-            Tuple of (list of citation dicts, total count).
+            Tuple of (list of citation dicts, total count). The total is None
+            if the response didn't include ``hitCount``; on a failed request
+            the result is ``([], 0)``.
         """
-        # Normalize identifier - remove PMC prefix if present for API call
-        if source == "PMC" and identifier.upper().startswith("PMC"):
-            identifier = identifier[3:]
-
-        endpoint = f"/{source}/{identifier}/citations/{page}/{page_size}/json"
-        data = self._request(endpoint)
-
-        if not data:
-            return [], 0
-
-        citation_list = data.get("citationList", {})
-        citations = citation_list.get("citation", [])
-        # Handle case where API returns single citation as dict instead of list
-        if isinstance(citations, dict):
-            citations = [citations]
-
-        total = data.get("hitCount", len(citations))
-        return citations, total
+        return self._get_linked("citations", source, identifier, page, page_size)
 
     def get_references(
         self,
@@ -542,36 +540,74 @@ class EuropePMCClient:
         identifier: str,
         page: int = 1,
         page_size: int = 1000,
-    ) -> tuple[list[dict], int]:
+    ) -> tuple[list[dict], int | None]:
         """Get papers cited by the given paper (references).
 
         Args:
             source: Data source (MED, PMC, PPR, etc.).
-            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            identifier: Identifier (PMID, PMCID, PPR ID, etc.).
             page: Page number (1-indexed).
             page_size: Results per page (max 1000).
 
         Returns:
-            Tuple of (list of reference dicts, total count).
+            Tuple of (list of reference dicts, total count). The total is None
+            if the response didn't include ``hitCount``; on a failed request
+            the result is ``([], 0)``.
         """
-        # Normalize identifier - remove PMC prefix if present for API call
-        if source == "PMC" and identifier.upper().startswith("PMC"):
-            identifier = identifier[3:]
+        return self._get_linked("references", source, identifier, page, page_size)
 
-        endpoint = f"/{source}/{identifier}/references/{page}/{page_size}/json"
-        data = self._request(endpoint)
+    def _get_linked(
+        self,
+        kind: str,
+        source: str,
+        identifier: str,
+        page: int,
+        page_size: int,
+    ) -> tuple[list[dict], int | None]:
+        """Fetch one page of citations or references.
 
-        if not data:
+        Uses ``/{source}/{id}/{kind}?page=&pageSize=&format=json``; the older
+        ``/{kind}/{page}/{pageSize}/json`` path form returns 404.
+        """
+        data = self._get_linked_page(kind, source, identifier, page, page_size)
+        if data is None:
             return [], 0
+        return self._parse_linked(kind, data)
 
-        reference_list = data.get("referenceList", {})
-        references = reference_list.get("reference", [])
-        # Handle case where API returns single reference as dict instead of list
-        if isinstance(references, dict):
-            references = [references]
+    def _get_linked_page(
+        self,
+        kind: str,
+        source: str,
+        identifier: str,
+        page: int,
+        page_size: int,
+    ) -> dict[str, Any] | None:
+        """Request one page of citations or references; None on failure."""
+        # PMC IDs keep their prefix: /PMC/3531190/citations finds nothing
+        if source == "PMC":
+            identifier = self.normalize_pmcid(identifier)
 
-        total = data.get("hitCount", len(references))
-        return references, total
+        params = {"page": page, "pageSize": min(page_size, 1000), "format": "json"}
+        return self._request(f"/{source}/{identifier}/{kind}", params)
+
+    @staticmethod
+    def _parse_linked(kind: str, data: dict[str, Any]) -> tuple[list[dict], int | None]:
+        """Split a citations/references response into (items, hitCount)."""
+
+        # citations -> citationList.citation, references -> referenceList.reference
+        item_key = kind[:-1]
+        items = data.get(f"{item_key}List", {}).get(item_key, [])
+        # Handle case where API returns a single item as dict instead of list
+        if isinstance(items, dict):
+            items = [items]
+
+        # A missing or unparseable hitCount means "unknown": page until a
+        # short page instead
+        try:
+            total = int(data["hitCount"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            total = None
+        return items, total
 
     def get_all_citations(
         self,
@@ -583,36 +619,17 @@ class EuropePMCClient:
 
         Args:
             source: Data source (MED, PMC, PPR, etc.).
-            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            identifier: Identifier (PMID, PMCID, PPR ID, etc.).
             max_results: Optional cap on total results.
 
         Returns:
             List of all citation dicts.
+
+        Raises:
+            IncompleteListError: If the list could not be read in full; its
+                ``items`` holds what was read.
         """
-        all_citations: list[dict] = []
-        page = 1
-        page_size = 1000
-
-        while True:
-            citations, total = self.get_citations(source, identifier, page, page_size)
-
-            if not citations:
-                break
-
-            all_citations.extend(citations)
-
-            # Check if we've reached max_results
-            if max_results and len(all_citations) >= max_results:
-                all_citations = all_citations[:max_results]
-                break
-
-            # Check if we've fetched all available
-            if len(all_citations) >= total:
-                break
-
-            page += 1
-
-        return all_citations
+        return self._get_all_linked("citations", source, identifier, max_results)
 
     def get_all_references(
         self,
@@ -624,36 +641,86 @@ class EuropePMCClient:
 
         Args:
             source: Data source (MED, PMC, PPR, etc.).
-            identifier: Identifier (PMID, PMCID without prefix, etc.).
+            identifier: Identifier (PMID, PMCID, PPR ID, etc.).
             max_results: Optional cap on total results.
 
         Returns:
             List of all reference dicts.
+
+        Raises:
+            IncompleteListError: If the list could not be read in full; its
+                ``items`` holds what was read.
         """
-        all_references: list[dict] = []
+        return self._get_all_linked("references", source, identifier, max_results)
+
+    # Upper bound on pages per list (100,000 items), so a response that never
+    # signals its end (no hitCount, or a hitCount that keeps growing) can't
+    # page forever against a shared API
+    MAX_LINKED_PAGES = 100
+
+    def _get_all_linked(
+        self,
+        kind: str,
+        source: str,
+        identifier: str,
+        max_results: int | None,
+    ) -> list[dict]:
+        """Collect every page of citations or references.
+
+        Pages until ``hitCount`` items have arrived (or, without a
+        ``hitCount``, until a short page), at most ``MAX_LINKED_PAGES`` pages.
+
+        Raises:
+            IncompleteListError: If a page request fails, pages run out
+                before ``hitCount`` items arrived, or the page limit is hit.
+        """
+        all_items: list[dict] = []
         page = 1
         page_size = 1000
 
         while True:
-            references, total = self.get_references(source, identifier, page, page_size)
+            data = self._get_linked_page(kind, source, identifier, page, page_size)
+            if data is None:
+                raise IncompleteListError(
+                    f"{kind} of {source}/{identifier}: request for page {page} "
+                    f"failed after {len(all_items)} items",
+                    all_items,
+                )
+            items, total = self._parse_linked(kind, data)
 
-            if not references:
+            if not items:
+                if total is not None and len(all_items) < total:
+                    raise IncompleteListError(
+                        f"{kind} of {source}/{identifier}: page {page} was empty "
+                        f"after {len(all_items)} of {total} items",
+                        all_items,
+                    )
                 break
 
-            all_references.extend(references)
+            all_items.extend(items)
 
             # Check if we've reached max_results
-            if max_results and len(all_references) >= max_results:
-                all_references = all_references[:max_results]
+            if max_results and len(all_items) >= max_results:
+                all_items = all_items[:max_results]
                 break
 
-            # Check if we've fetched all available
-            if len(all_references) >= total:
+            # Check if we've fetched all available: by hitCount when the
+            # response has one, otherwise by a short page
+            if total is not None:
+                if len(all_items) >= total:
+                    break
+            elif len(items) < page_size:
                 break
 
+            if page >= self.MAX_LINKED_PAGES:
+                raise IncompleteListError(
+                    f"{kind} of {source}/{identifier}: stopped after {page} pages "
+                    f"({len(all_items)} items) without reaching the end",
+                    all_items,
+                )
             page += 1
 
-        return all_references
+        return all_items
 
     @staticmethod
     def build_query(
@@ -719,8 +786,8 @@ def _get_best_id(paper: dict) -> tuple[str | None, str | None]:
 
     Priority: Use article's source + corresponding ID
     - MED source → use PMID
-    - PMC source → use PMCID
-    - Other sources → use source + id
+    - PMC source → use PMCID, with its PMC prefix
+    - Other sources (PPR, AGR, ...) → use source + id
 
     Args:
         paper: Paper metadata dict with source, id, pmcid, pmid, and/or doi.
@@ -729,30 +796,33 @@ def _get_best_id(paper: dict) -> tuple[str | None, str | None]:
         (source, identifier) tuple for Europe PMC API, or (None, None).
     """
     source = paper.get("source", "")
+    paper_id = paper.get("id")
 
     # Use the article's actual source and corresponding ID
     if source == "MED":
-        pmid = paper.get("pmid") or paper.get("id")
+        pmid = paper.get("pmid") or paper_id
         if pmid:
             return ("MED", str(pmid))
 
     if source == "PMC":
-        pmcid = paper.get("pmcid")
-        if pmcid:
-            # Normalize PMCID - remove prefix for API call
-            if str(pmcid).upper().startswith("PMC"):
-                pmcid = str(pmcid)[3:]
-            return ("PMC", str(pmcid))
+        for candidate in (paper.get("pmcid"), paper_id):
+            if candidate:
+                with contextlib.suppress(ValueError):
+                    return ("PMC", normalize_pmcid(candidate))
+
+    # Other sources are looked up under their own ID (/PPR/PPR123/...);
+    # /MED/PPR123/... finds nothing
+    if source and source not in ("MED", "PMC") and paper_id:
+        return (source, str(paper_id))
 
     # Fallback: try pmcid if available (for papers without source info)
     pmcid = paper.get("pmcid")
     if pmcid:
-        if str(pmcid).upper().startswith("PMC"):
-            pmcid = str(pmcid)[3:]
-        return ("PMC", str(pmcid))
+        with contextlib.suppress(ValueError):
+            return ("PMC", normalize_pmcid(pmcid))
 
     # Fallback: try pmid if available
-    pmid = paper.get("pmid") or paper.get("id")
+    pmid = paper.get("pmid") or paper_id
     if pmid:
         return ("MED", str(pmid))
 
@@ -760,46 +830,41 @@ def _get_best_id(paper: dict) -> tuple[str | None, str | None]:
     return (None, None)
 
 
-def _get_canonical_key(paper: dict) -> str | None:
-    """Get canonical key for deduplication.
+def _get_identity_keys(paper: dict) -> set[str]:
+    """Get every identifier a paper is known by, for deduplication.
 
-    Uses priority: DOI (most universal) > PMCID > PMID.
+    Seeds from search carry a DOI, PMID and PMCID, while citation and
+    reference records usually carry only ``source`` and ``id``. Two records
+    are the same paper if they share any of these keys.
 
     Args:
         paper: Paper metadata dict.
 
     Returns:
-        Canonical key string or None if no usable ID.
+        Set of keys such as ``doi:10.1/x``, ``pmcid:PMC1``, ``pmid:123`` and
+        ``PPR:PPR123``; empty if the paper has no usable ID.
     """
+    keys: set[str] = set()
+    source = paper.get("source") or ""
+    paper_id = paper.get("id")
+
     doi = paper.get("doi")
     if doi:
-        return f"doi:{doi.lower()}"
+        keys.add(f"doi:{str(doi).strip().lower()}")
 
-    pmcid = paper.get("pmcid")
-    if pmcid:
-        # Normalize PMCID
-        pmcid_upper = pmcid.upper()
-        if not pmcid_upper.startswith("PMC"):
-            pmcid_upper = f"PMC{pmcid_upper}"
-        return f"pmcid:{pmcid_upper}"
+    for pmcid in (paper.get("pmcid"), paper_id if source == "PMC" else None):
+        if pmcid:
+            with contextlib.suppress(ValueError):
+                keys.add(f"pmcid:{normalize_pmcid(pmcid)}")
 
-    pmid = paper.get("pmid") or paper.get("id")
-    source = paper.get("source", "")
-    if pmid and source == "MED":
-        return f"pmid:{pmid}"
+    for pmid in (paper.get("pmid"), paper_id if source == "MED" else None):
+        if pmid:
+            keys.add(f"pmid:{str(pmid).strip()}")
 
-    return None
+    if source and paper_id and source not in ("MED", "PMC"):
+        keys.add(f"{source}:{str(paper_id).strip()}")
 
-
-def _get_canonical_key_from_article(article: EuropePMCArticle) -> str | None:
-    """Get canonical key from EuropePMCArticle object."""
-    if article.doi:
-        return f"doi:{article.doi.lower()}"
-    if article.pmcid:
-        return f"pmcid:{article.pmcid.upper()}"
-    if article.pmid:
-        return f"pmid:{article.pmid}"
-    return None
+    return keys
 
 
 def _article_to_dict(article: EuropePMCArticle) -> dict:
@@ -869,9 +934,7 @@ def expand_papers(
     seeds_with_neither = 0
 
     for seed in seeds:
-        key = _get_canonical_key_from_article(seed)
-        if key:
-            seen_keys.add(key)
+        seen_keys |= _get_identity_keys(_article_to_dict(seed))
 
     # Determine expansion directions
     directions: list[str] = []
@@ -973,29 +1036,47 @@ def expand_papers(
             expanded_papers[next_depth] = []
 
         for direction in directions:
+            # Don't download another list once the budget is used up
+            total_so_far = sum(len(p) for p in expanded_papers.values())
+            if max_expansion and total_so_far >= max_expansion:
+                break
+
             try:
+                try:
+                    if direction == "citations":
+                        related = client.get_all_citations(source, identifier)
+                    else:
+                        related = client.get_all_references(source, identifier)
+                except IncompleteListError as e:
+                    # Use what arrived, and report the shortfall
+                    logger.warning("Incomplete expansion list: %s", e)
+                    id_issues["lookup_failed"].append(f"{source}/{identifier}")
+                    related = e.items
+
                 if direction == "citations":
-                    related = client.get_all_citations(source, identifier)
                     total_cites_found += len(related)
                 else:
-                    related = client.get_all_references(source, identifier)
                     total_refs_found += len(related)
 
                 for related_paper in related:
-                    canonical_key = _get_canonical_key(related_paper)
-                    if not canonical_key:
+                    identity_keys = _get_identity_keys(related_paper)
+                    if not identity_keys:
                         continue
 
-                    if canonical_key in seen_keys:
+                    # A match on any identifier (DOI, PMCID, PMID, source:id)
+                    # means the paper is a seed or was already found; its
+                    # other identifiers now name the same paper too
+                    if identity_keys & seen_keys:
+                        seen_keys |= identity_keys
                         duplicates_skipped += 1
                         continue
-
-                    seen_keys.add(canonical_key)
 
                     # Check max_expansion
                     total_so_far = sum(len(p) for p in expanded_papers.values())
                     if max_expansion and total_so_far >= max_expansion:
                         break
+
+                    seen_keys |= identity_keys
 
                     # Add paper type annotation
                     related_paper["_expansion_type"] = direction
@@ -1052,6 +1133,7 @@ def expand_papers(
             "citations_found": total_cites_found,
             "total_unique": sum(len(p) for p in expanded_papers.values()),
             "duplicates_skipped": duplicates_skipped,
+            "lookup_failed": len(id_issues["lookup_failed"]),
         },
         id_issues=id_issues,
         layers=layers,

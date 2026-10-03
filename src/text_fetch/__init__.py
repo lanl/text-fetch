@@ -31,6 +31,7 @@ from .common import (
 from .europepmc import (
     EuropePMCArticle,
     EuropePMCClient,
+    IncompleteListError,
     fetch_europepmc,
 )
 from .fetch import (
@@ -72,6 +73,7 @@ __all__ = [
     "ExpansionPlan",
     "GROBIDClient",
     "GROBIDOCRError",
+    "IncompleteListError",
     "MEDRXIV_CATEGORIES",
     "PDFProcessingResult",
     "SearchConfig",
