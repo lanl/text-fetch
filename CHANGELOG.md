@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **PMC fetches downloaded nothing** - the NCBI ID converter returns `pmid` as an
+  integer, so no PMID matched its PMCID and `pmc fetch` (and the `pmc` source of
+  `fetch`) reported `pmcids_available: 0`. Records are now matched on the
+  `requested-id` echo, with case-insensitive DOI and PMCID matching. The ID
+  converter URL is updated to `https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/`
+  (the old one redirected there).
+- **Lowercase and mixed-case PMCIDs** - `fetch_pmc_xml` stripped the prefix with
+  `lstrip("PMC")`, so `pmc123` was sent as `pmc123` and `Pmc123` as `mc123`. One
+  `normalize_pmcid()` in `text_fetch.common` now handles every PMCID: any case of
+  the `PMC` prefix followed by digits. Invalid IDs (such as `PMCPMC1`) are never
+  sent to an API: `europepmc fetch --pmcid` exits with a usage error, and a
+  malformed PMCID in Europe PMC results or a plan file skips that one paper (with a
+  warning, counted as an error where it is fetched) instead of stopping the run.
+  A `--pmcid` that Europe PMC doesn't know is now counted as an error too, and the
+  `fetch` summary prints the total error count.
+- **Expansion with no usable seeds downloaded unrelated papers** - when a
+  `fetch --expand` run's seed search found no seeds with a PMCID, the seed fetch
+  received an empty ID list, treated it as "no list given", and searched for every
+  open-access article with full text. `fetch_europepmc(pmcids=[])` now fetches
+  nothing, and `fetch --from-plan` refuses a plan that lists no valid PMC IDs.
+
 ### Performance
 - **Batch PMCID Lookup** - 6× faster PMCID resolution during citation expansion
   - New `batch_lookup_pmids()` method in `EuropePMCClient`

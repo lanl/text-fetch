@@ -470,6 +470,7 @@ def unified_fetch_cmd(
     click.echo(f"Total fetched: {stats['total_fetched']:,}")
     click.echo(f"Total valid: {stats['total_valid']:,}")
     click.echo(f"Total incomplete: {stats['total_incomplete']:,}")
+    click.echo(f"Total errors: {stats.get('total_errors', 0):,}")
     if ws:
         dupe_cnt = stats.get("duplicates_skipped", 0)
         click.echo(f"Duplicates skipped: {dupe_cnt:,}")
@@ -555,6 +556,9 @@ def _display_dry_run_report(
     click.echo("\nSEED PAPERS")
     click.echo(f"  Query matched: {seed_stats.get('articles_found', 0):,}")
     click.echo(f"  With PMCIDs (downloadable): {seed_stats.get('with_pmcid', 0):,}")
+    invalid_pmcid = seed_stats.get("invalid_pmcid", 0)
+    if invalid_pmcid:
+        click.echo(f"  - Invalid PMCIDs (skipped): {invalid_pmcid:,}")
 
     # Expansion configuration
     click.echo("\nEXPANSION CONFIG")
@@ -613,7 +617,10 @@ def _display_dry_run_report(
 
     # Resource estimates
     seeds_with_pmcid = seed_stats.get("with_pmcid", 0)
-    total_papers = seeds_with_pmcid + total_unique
+    downloadable_seeds = seed_stats.get(
+        "downloadable", seeds_with_pmcid - seed_stats.get("invalid_pmcid", 0)
+    )
+    total_papers = downloadable_seeds + total_unique
 
     # Average JATS XML size: ~150 KB, compression ratio: ~10:1
     avg_xml_size_kb = 150
@@ -685,6 +692,10 @@ def _handle_from_plan(
     # Load expansion plan
     plan_path = Path(from_plan)
     plan = ExpansionPlan.from_json(plan_path)
+    if not plan.seed_pmcids and not plan.expanded_pmcids:
+        raise click.ClickException(
+            f"Expansion plan {from_plan} lists no valid PMC IDs; nothing to fetch"
+        )
 
     # Display plan summary
     click.echo("=" * 60)

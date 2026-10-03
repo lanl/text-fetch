@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
-from .common import RateLimiter
+from .common import RateLimiter, normalize_pmcid
 
 if TYPE_CHECKING:
     from .workspace import Workspace
@@ -356,11 +356,18 @@ class EuropePMCClient:
         source = item.get("source", "")
         has_full_text = item.get("hasFullText") == "Y" or source == "PMC"
 
+        # Canonical PMC123 form; a malformed value is kept so the fetch
+        # counts it as an error instead of skipping the article unseen
+        pmcid = item.get("pmcid")
+        if pmcid:
+            with contextlib.suppress(ValueError):
+                pmcid = normalize_pmcid(pmcid)
+
         return EuropePMCArticle(
             id=article_id,
             source=source,
             pmid=item.get("pmid"),
-            pmcid=item.get("pmcid"),
+            pmcid=pmcid,
             doi=item.get("doi"),
             title=item.get("title", ""),
             authors=authors,
@@ -486,11 +493,11 @@ class EuropePMCClient:
 
         Returns:
             Clean PMC ID (PMC123456).
+
+        Raises:
+            ValueError: If the value is not a PMC ID.
         """
-        pmcid = pmcid.strip().upper()
-        if not pmcid.startswith("PMC"):
-            pmcid = f"PMC{pmcid}"
-        return pmcid
+        return normalize_pmcid(pmcid)
 
     def get_citations(
         self,
@@ -1092,7 +1099,8 @@ def fetch_europepmc(
         keywords: Keywords for search.
         date_from: Start date (YYYY-MM-DD).
         date_to: End date (YYYY-MM-DD).
-        pmcids: Alternative - list of PMC IDs to fetch directly.
+        pmcids: Alternative - list of PMC IDs to fetch directly. An empty
+            list fetches nothing (it does not fall back to a search).
         output_dir: Output directory (used if workspace is None).
         workspace: Optional workspace for deduplication and output.
         max_results: Maximum articles to fetch (None = unlimited).
@@ -1114,7 +1122,8 @@ def fetch_europepmc(
         - incomplete: Number incomplete
         - skipped: Number skipped (duplicates)
         - duplicates_skipped: Number of DOI duplicates (workspace mode)
-        - errors: Number of errors
+        - errors: Number of errors (including entries of ``pmcids`` that
+          aren't PMC IDs, which are skipped without a request)
         - resumed_from: Number of papers already completed (if resumed)
     """
     from .checkpoint import (
@@ -1166,14 +1175,37 @@ def fetch_europepmc(
 
     client = EuropePMCClient()
 
-    # Get articles either by search or by PMCIDs
-    if pmcids:
+    # Get articles either by search or by PMCIDs. An empty list means
+    # "fetch nothing", not "search everything": with no search terms the
+    # query would match all of Europe PMC's open-access full text.
+    if pmcids is not None:
         # Direct PMCID lookup
         articles = []
         for pmcid in pmcids:
-            article = client.get_by_pmcid(pmcid)
-            if article:
-                articles.append(article)
+            try:
+                article = client.get_by_pmcid(pmcid)
+            except ValueError as e:
+                logger.error("Skipping %r: %s", pmcid, e)
+                stats["errors"] += 1
+                continue
+            # Count a PMCID Europe PMC doesn't know, or answers with another
+            # article, so every requested PMCID ends up fetched, skipped or
+            # an error
+            found = None
+            if article is not None and article.pmcid:
+                with contextlib.suppress(ValueError):
+                    found = normalize_pmcid(article.pmcid)
+            if article is not None and found is not None:
+                with contextlib.suppress(ValueError):
+                    if found == normalize_pmcid(pmcid):
+                        articles.append(article)
+                        continue
+            logger.error(
+                "PMCID not found in Europe PMC: %s (got %s)",
+                pmcid,
+                found or "no article",
+            )
+            stats["errors"] += 1
         stats["articles_found"] = len(articles)
     else:
         # Build and execute search
@@ -1206,7 +1238,7 @@ def fetch_europepmc(
 
     if not fetchable:
         # Update workspace source record even if no results
-        if workspace:
+        if workspace and stats["errors"] == 0:
             workspace.update_source_record("europepmc", 0)
         return stats
 

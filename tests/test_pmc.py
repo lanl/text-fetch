@@ -1025,3 +1025,55 @@ consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.</p>
 
         manifest_data = json.loads((tmp_path / "manifest.json").read_text())
         assert manifest_data["metadata"]["query"] == "hlavacek ws[au]"
+
+    def test_fetch_pmc_end_to_end_live_response_shapes(
+        self, tmp_path: Path, requests_mock, monkeypatch
+    ):
+        """PubMed hits are converted, downloaded and saved (#1).
+
+        Uses the real NCBIClient against mocked endpoints whose payloads match
+        the live APIs: esearch returns string PMIDs and a string count, and the
+        ID converter returns integer PMIDs with a requested-id echo.
+        """
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+            json={"esearchresult": {"count": "3", "idlist": ["111", "222", "333"]}},
+        )
+        requests_mock.get(
+            "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/",
+            json={
+                "status": "ok",
+                "records": [
+                    {"pmcid": "PMC1111", "pmid": 111, "requested-id": "111"},
+                    {"pmid": 222, "requested-id": "222"},  # no PMC full text
+                    {"pmcid": "PMC3333", "pmid": 333, "requested-id": "333"},
+                ],
+            },
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.VALID_JATS,
+        )
+
+        stats = fetch_pmc(
+            query="hlavacek ws[au]",
+            email="user@example.com",
+            output_dir=tmp_path,
+        )
+
+        assert stats["pmids_found"] == 3
+        assert stats["pmcids_available"] == 2
+        assert stats["fetched"] == 2
+        assert stats["errors"] == 0
+        assert sorted(p.name for p in (tmp_path / "valid").iterdir()) == [
+            "PMC1111.xml",
+            "PMC3333.xml",
+        ]
+        efetch_ids = [
+            r.qs["id"] for r in requests_mock.request_history if "efetch" in r.url
+        ]
+        assert efetch_ids == [["1111"], ["3333"]]
+        manifest = json.loads((tmp_path / "manifest.json").read_text())
+        pmcids = sorted(e["pmcid"] for e in manifest["articles"])
+        assert pmcids == ["PMC1111", "PMC3333"]

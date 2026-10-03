@@ -933,6 +933,354 @@ class TestExpansionPlan:
         assert loaded.expansion_config == original.expansion_config
         assert loaded.stats == original.stats
 
+    def test_from_json_normalizes_pmcids(self, tmp_path: Path) -> None:
+        """Hand-edited plans with lowercase PMCIDs load in canonical form (#30)."""
+        plan_path = tmp_path / ".expansion_plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "created_at": "2025-01-25T12:00:00Z",
+                    "text_fetch_version": "0.3.2",
+                    "config_file": "test.json",
+                    "query": "test",
+                    "sources": ["europepmc"],
+                    "seed_pmcids": ["pmc1", " PMC2"],
+                    "expanded_pmcids": ["Pmc3", "4"],
+                }
+            )
+        )
+
+        plan = ExpansionPlan.from_json(plan_path)
+
+        assert plan.seed_pmcids == ["PMC1", "PMC2"]
+        assert plan.expanded_pmcids == ["PMC3", "PMC4"]
+
+    def test_from_json_skips_bad_pmcid(self, tmp_path: Path) -> None:
+        """A plan entry that isn't a PMC ID is skipped; the rest load (#30)."""
+        plan_path = tmp_path / ".expansion_plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "created_at": "2025-01-25T12:00:00Z",
+                    "text_fetch_version": "0.3.2",
+                    "config_file": "test.json",
+                    "query": "test",
+                    "sources": ["europepmc"],
+                    "seed_pmcids": ["PMC1", "PMC22a"],
+                    "expanded_pmcids": ["PMCPMC2", "PMC3"],
+                }
+            )
+        )
+
+        plan = ExpansionPlan.from_json(plan_path)
+
+        assert plan.seed_pmcids == ["PMC1"]
+        assert plan.expanded_pmcids == ["PMC3"]
+
+
+class TestExpansionInvalidPmcid:
+    """A malformed PMCID from Europe PMC skips one paper, not the run (#30)."""
+
+    EPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest"
+    JATS = (
+        "<pmc-articleset><article><front><article-meta><title-group>"
+        "<article-title>T</article-title></title-group></article-meta></front>"
+        "</article></pmc-articleset>"
+    )
+
+    def _mock(self, requests_mock) -> None:
+        import re
+        from urllib.parse import parse_qs, urlsplit
+
+        seeds = [
+            {"id": "S1", "source": "PMC", "pmcid": "PMC1", "doi": "10.1/s1"},
+            {"id": "S2", "source": "PMC", "pmcid": "PMC22a", "doi": "10.1/s2"},
+            {"id": "S3", "source": "PMC", "pmcid": "pmc3", "doi": "10.1/s3"},
+        ]
+
+        def search(request, context):
+            query = parse_qs(urlsplit(request.url).query)["query"][0]
+            if query.upper().startswith("PMCID:"):
+                wanted = query.split(":", 1)[1].upper()
+                hits = [s for s in seeds if s["pmcid"].upper() == wanted]
+            else:
+                hits = seeds
+            return {"hitCount": len(hits), "resultList": {"result": hits}}
+
+        requests_mock.get(f"{self.EPMC}/search", json=search)
+        requests_mock.get(
+            re.compile(r".*/references.*"),
+            json={"hitCount": 0, "referenceList": {"reference": []}},
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.JATS,
+        )
+
+    def test_dry_run_plan_is_loadable(self, tmp_path: Path, requests_mock) -> None:
+        """The saved plan holds only valid, normalized PMCIDs and loads back."""
+        self._mock(requests_mock)
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        unified_fetch(
+            config=config,
+            output_dir=tmp_path,
+            email="user@example.com",
+            expand_references=True,
+            dry_run=True,
+        )
+
+        plan = ExpansionPlan.from_json(tmp_path / ".expansion_plan.json")
+        assert plan.seed_pmcids == ["PMC1", "PMC3"]
+        assert plan.stats["seeds_with_pmcid"] == 3
+
+    def test_seed_duplicates_reach_unified_stats(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """A seed already in the workspace is counted in duplicates_skipped."""
+        from text_fetch.workspace import Workspace
+
+        self._mock(requests_mock)
+        ws = Workspace.init(tmp_path / "ws")
+        ws.add_file("<article/>", "10.1/s1", "pmc", "s0", True, "PMC1.xml")
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config,
+            workspace=ws,
+            email="user@example.com",
+            expand_references=True,
+        )
+
+        assert stats["duplicates_skipped"] == 1
+
+    def test_expanded_duplicates_reach_unified_stats(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """An expanded paper already in the workspace is counted too."""
+        import re
+        from urllib.parse import parse_qs, urlsplit
+
+        from text_fetch.workspace import Workspace
+
+        def search(request, context):
+            query = parse_qs(urlsplit(request.url).query)["query"][0]
+            if query.upper().startswith("PMCID:PMC7"):
+                hit = {"id": "P7", "source": "PMC", "pmcid": "PMC7", "doi": "10.1/e7"}
+            else:
+                hit = {"id": "S1", "source": "PMC", "pmcid": "PMC1", "doi": "10.1/s1"}
+            return {"hitCount": 1, "resultList": {"result": [hit]}}
+
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search", json=search
+        )
+        requests_mock.get(
+            re.compile(r".*/references.*"),
+            json={
+                "hitCount": 1,
+                "referenceList": {
+                    "reference": [{"id": "PMC7", "source": "PMC", "pmcid": "PMC7"}]
+                },
+            },
+        )
+        requests_mock.get(
+            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+            text=self.JATS,
+        )
+        ws = Workspace.init(tmp_path / "ws")
+        ws.add_file("<article/>", "10.1/e7", "pmc", "s0", True, "PMC7.xml")
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config,
+            workspace=ws,
+            email="user@example.com",
+            expand_references=True,
+        )
+
+        assert stats["duplicates_skipped"] == 1
+        assert stats["expansion"]["seeds_fetched"] == 1
+
+    def test_duplicate_seed_listed_once(
+        self, tmp_path: Path, requests_mock, capsys
+    ) -> None:
+        """PMC1 and pmc1 are one seed: one plan entry, one expansion."""
+        from text_fetch.cli.fetch import _display_dry_run_report
+
+        import re
+
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            json={
+                "hitCount": 2,
+                "resultList": {
+                    "result": [
+                        {"id": "S1", "source": "PMC", "pmcid": "PMC1"},
+                        {"id": "S1b", "source": "PMC", "pmcid": "pmc1"},
+                    ]
+                },
+            },
+        )
+        requests_mock.get(
+            re.compile(r".*/references.*"),
+            json={"hitCount": 0, "referenceList": {"reference": []}},
+        )
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config,
+            output_dir=tmp_path,
+            email="user@example.com",
+            expand_references=True,
+            dry_run=True,
+        )
+        _display_dry_run_report(stats, str(tmp_path), True, False)
+
+        assert "Papers to download: 1" in capsys.readouterr().out
+        plan = ExpansionPlan.from_json(tmp_path / ".expansion_plan.json")
+        assert plan.seed_pmcids == ["PMC1"]
+        assert plan.stats["seeds_with_pmcid"] == 2
+        # One expansion of the seed: its reference list is downloaded once
+        # (plus one small coverage request)
+        lists = [r for r in requests_mock.request_history if "references" in r.url]
+        assert len(lists) == 2
+
+    def test_dry_run_reports_invalid_seeds(
+        self, tmp_path: Path, requests_mock, capsys
+    ) -> None:
+        """The dry-run seed stats and report show the skipped seed."""
+        from text_fetch.cli.fetch import _display_dry_run_report
+
+        self._mock(requests_mock)
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config,
+            output_dir=tmp_path,
+            email="user@example.com",
+            expand_references=True,
+            dry_run=True,
+        )
+        _display_dry_run_report(stats, str(tmp_path), True, False)
+
+        assert stats["seed_stats"]["invalid_pmcid"] == 1
+        out = capsys.readouterr().out
+        assert "Invalid PMCIDs (skipped): 1" in out
+        # 3 seeds with a PMCID, one invalid, nothing expanded: 2 to download
+        assert "Papers to download: 2" in out
+
+    def test_malformed_seed_not_sent_to_citation_api(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """Only valid seeds are expanded; PMC22a's references aren't requested."""
+        self._mock(requests_mock)
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        unified_fetch(
+            config=config,
+            output_dir=tmp_path,
+            email="user@example.com",
+            expand_references=True,
+            dry_run=True,
+        )
+
+        linked = [r.url for r in requests_mock.request_history if "references" in r.url]
+        assert linked
+        assert not [u for u in linked if "22a" in u.lower()]
+
+    def test_fetch_downloads_the_valid_seeds(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """The valid seeds are downloaded; the malformed one is an error."""
+        self._mock(requests_mock)
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config,
+            output_dir=tmp_path,
+            email="user@example.com",
+            expand_references=True,
+        )
+
+        assert stats["expansion"]["seeds_fetched"] == 2
+        assert stats["total_errors"] == 1
+        assert stats["duplicates_skipped"] == 0
+        assert sorted(p.name for p in (tmp_path / "valid").iterdir()) == [
+            "PMC1.xml",
+            "PMC3.xml",
+        ]
+
+
+class TestExpansionStatsPassedUp:
+    """Seed and expanded duplicate counts reach the unified stats."""
+
+    @patch("text_fetch.fetch._handle_europepmc_expansion")
+    def test_duplicates_skipped_summed(
+        self, mock_expansion: MagicMock, tmp_path: Path
+    ) -> None:
+        """duplicates_skipped = seed duplicates + expanded duplicates."""
+        mock_expansion.return_value = {
+            "seeds_fetched": 1,
+            "seeds_duplicates_skipped": 2,
+            "expanded_duplicates_skipped": 3,
+            "expansion_stats": {},
+        }
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config, output_dir=tmp_path, expand_references=True
+        )
+
+        assert stats["duplicates_skipped"] == 5
+
+
+class TestExpansionNoValidSeeds:
+    """Seeds whose PMCIDs are all invalid never turn into a full crawl (#30)."""
+
+    def test_all_bad_seed_pmcids_fetch_nothing(
+        self, tmp_path: Path, requests_mock
+    ) -> None:
+        """Only the seed search is made; no unfiltered search, no files."""
+        import re
+        from urllib.parse import parse_qs, urlsplit
+
+        seeds = [
+            {"id": "S1", "source": "PMC", "pmcid": "PMC1a", "doi": "10.1/s1"},
+            {"id": "S2", "source": "PMC", "pmcid": "PMC2 b", "doi": "10.1/s2"},
+        ]
+        unrelated = [{"id": "PMC900", "source": "PMC", "pmcid": "PMC900"}]
+
+        def search(request, context):
+            query = parse_qs(urlsplit(request.url).query)["query"][0]
+            hits = seeds if "AUTH" in query else unrelated
+            return {"hitCount": len(hits), "resultList": {"result": hits}}
+
+        requests_mock.get(
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/search", json=search
+        )
+        requests_mock.get(
+            re.compile(r".*/references.*"),
+            json={"hitCount": 0, "referenceList": {"reference": []}},
+        )
+        config = SearchConfig.from_dict({"author": "x", "sources": ["europepmc"]})
+
+        stats = unified_fetch(
+            config=config,
+            output_dir=tmp_path,
+            email="user@example.com",
+            expand_references=True,
+        )
+
+        queries = [
+            parse_qs(urlsplit(r.url).query)["query"][0]
+            for r in requests_mock.request_history
+            if "/search" in r.url
+        ]
+        assert all("AUTH" in q for q in queries)
+        assert not list(tmp_path.rglob("*.xml"))
+        assert stats["total_fetched"] == 0
+        assert stats["total_errors"] == 2
+
 
 class TestUnifiedFetchWithPlan:
     """Tests for unified_fetch with expansion_plan parameter."""

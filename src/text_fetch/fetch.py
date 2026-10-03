@@ -17,12 +17,24 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import __version__
+from .common import normalize_pmcid
 from .query import SearchConfig
 
 if TYPE_CHECKING:
     from .workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+
+def _valid_pmcids(values: list[Any]) -> list[str]:
+    """Normalize PMC IDs, skipping (with a warning) any that aren't PMC IDs."""
+    pmcids: list[str] = []
+    for value in values:
+        try:
+            pmcids.append(normalize_pmcid(value))
+        except ValueError:
+            logger.warning("Skipping paper with invalid PMCID %r", value)
+    return pmcids
 
 
 @dataclass
@@ -56,7 +68,11 @@ class ExpansionPlan:
 
     @classmethod
     def from_json(cls, path: Path) -> ExpansionPlan:
-        """Load expansion plan from JSON file."""
+        """Load expansion plan from JSON file.
+
+        PMC IDs are normalized (``pmc123`` becomes ``PMC123``); entries that
+        are not PMC IDs are skipped with a warning.
+        """
         data = json.loads(path.read_text())
         return cls(
             created_at=data["created_at"],
@@ -64,8 +80,8 @@ class ExpansionPlan:
             config_file=data["config_file"],
             query=data["query"],
             sources=data["sources"],
-            seed_pmcids=data["seed_pmcids"],
-            expanded_pmcids=data["expanded_pmcids"],
+            seed_pmcids=_valid_pmcids(data["seed_pmcids"]),
+            expanded_pmcids=_valid_pmcids(data["expanded_pmcids"]),
             expansion_config=data.get("expansion_config", {}),
             stats=data.get("stats", {}),
         )
@@ -252,6 +268,9 @@ def unified_fetch(
         stats["total_errors"] = expansion_result.get(
             "seeds_errors", 0
         ) + expansion_result.get("expanded_errors", 0)
+        stats["duplicates_skipped"] = expansion_result.get(
+            "seeds_duplicates_skipped", 0
+        ) + expansion_result.get("expanded_duplicates_skipped", 0)
 
         # Populate per_source for consistent display
         stats["per_source"]["europepmc"] = {
@@ -519,11 +538,17 @@ def _handle_europepmc_expansion(
 
     # Filter to papers with PMCIDs (downloadable)
     seeds_with_pmcid = [s for s in seeds if s.pmcid]
+    valid_seed_pmcids = _valid_pmcids([s.pmcid for s in seeds_with_pmcid])
+    # Each PMCID once (the same seed can be listed twice)
+    seed_pmcids = list(dict.fromkeys(valid_seed_pmcids))
 
     seed_stats = {
         "query": query,
         "articles_found": len(seeds),
         "with_pmcid": len(seeds_with_pmcid),
+        "invalid_pmcid": len(seeds_with_pmcid) - len(valid_seed_pmcids),
+        # Distinct valid PMCIDs: what the seed fetch will request
+        "downloadable": len(seed_pmcids),
     }
 
     if verbose:
@@ -547,9 +572,23 @@ def _handle_europepmc_expansion(
         if progress_callback:
             progress_callback("europepmc", f"expand:{stage}", current, total)
 
+    # Expand only seeds with a valid PMCID (a malformed one is never sent
+    # on), each PMCID once
+    valid_seeds: list[EuropePMCArticle] = []
+    seen_seed_pmcids: set[str] = set()
+    for seed in seeds_with_pmcid:
+        try:
+            seed_pmcid = normalize_pmcid(seed.pmcid or "")
+        except ValueError:
+            continue
+        if seed_pmcid in seen_seed_pmcids:
+            continue
+        seen_seed_pmcids.add(seed_pmcid)
+        valid_seeds.append(seed)
+
     expansion_result = expand_papers(
         client=client,
-        seeds=seeds_with_pmcid,
+        seeds=valid_seeds,
         expand_references=expand_references,
         expand_citations=expand_citations,
         depth=expansion_depth,
@@ -558,16 +597,14 @@ def _handle_europepmc_expansion(
     )
 
     # Extract expanded PMCIDs from expansion_result
-    seed_pmcids = [s.pmcid for s in seeds_with_pmcid if s.pmcid]
-    expanded_pmcids_list: list[str] = []
-    for papers in expansion_result.expanded_papers.values():
-        for paper in papers:
-            pmcid = paper.get("pmcid")
-            if pmcid:
-                # Normalize PMCID
-                if not str(pmcid).upper().startswith("PMC"):
-                    pmcid = f"PMC{pmcid}"
-                expanded_pmcids_list.append(pmcid)
+    expanded_pmcids_list = _valid_pmcids(
+        [
+            paper.get("pmcid")
+            for papers in expansion_result.expanded_papers.values()
+            for paper in papers
+            if paper.get("pmcid")
+        ]
+    )
 
     # Remove duplicates while preserving order
     seen_ids: set[str] = set(seed_pmcids)
@@ -624,10 +661,10 @@ def _handle_europepmc_expansion(
     if verbose:
         logger.info("Fetching %d seed papers...", len(seeds_with_pmcid))
 
-    seed_pmcids = [s.pmcid for s in seeds_with_pmcid if s.pmcid]
-
+    # Pass the seeds as found, so fetch_europepmc counts a malformed PMCID
+    # as an error (conservation: seeds = fetched + duplicates + errors)
     seed_fetch_stats = fetch_europepmc(
-        pmcids=seed_pmcids,
+        pmcids=[s.pmcid for s in seeds_with_pmcid if s.pmcid],
         output_dir=output_dir,
         workspace=workspace,
         verbose=verbose,
@@ -636,24 +673,8 @@ def _handle_europepmc_expansion(
         api_key=api_key,
     )
 
-    # Phase 4: Fetch expanded papers
-    expanded_pmcids: list[str] = []
-    for papers in expansion_result.expanded_papers.values():
-        for paper in papers:
-            pmcid = paper.get("pmcid")
-            if pmcid:
-                # Normalize PMCID
-                if not str(pmcid).upper().startswith("PMC"):
-                    pmcid = f"PMC{pmcid}"
-                expanded_pmcids.append(pmcid)
-
-    # Remove duplicates while preserving order
-    seen: set[str] = set(seed_pmcids)
-    unique_expanded: list[str] = []
-    for pmcid in expanded_pmcids:
-        if pmcid not in seen:
-            seen.add(pmcid)
-            unique_expanded.append(pmcid)
+    # Phase 4: Fetch expanded papers (the same list the plan holds)
+    unique_expanded = unique_expanded_for_plan
 
     if verbose:
         logger.info("Fetching %d expanded papers...", len(unique_expanded))
@@ -676,10 +697,14 @@ def _handle_europepmc_expansion(
         "seeds_valid": seed_fetch_stats.get("valid", 0),
         "seeds_incomplete": seed_fetch_stats.get("incomplete", 0),
         "seeds_errors": seed_fetch_stats.get("errors", 0),
+        "seeds_duplicates_skipped": seed_fetch_stats.get("duplicates_skipped", 0),
         "expanded_fetched": expanded_fetch_stats.get("fetched", 0),
         "expanded_valid": expanded_fetch_stats.get("valid", 0),
         "expanded_incomplete": expanded_fetch_stats.get("incomplete", 0),
         "expanded_errors": expanded_fetch_stats.get("errors", 0),
+        "expanded_duplicates_skipped": expanded_fetch_stats.get(
+            "duplicates_skipped", 0
+        ),
         "total_unique": len(seed_pmcids) + len(unique_expanded),
         "expansion_stats": expansion_result.expansion_stats,
         "seed_coverage": expansion_result.seed_coverage,

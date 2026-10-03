@@ -15,6 +15,24 @@ if TYPE_CHECKING:
     from ..europepmc import ExpansionResult
 
 
+def _validate_pmcids(
+    ctx: click.Context, param: click.Parameter, value: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Reject --pmcid values that aren't PMC IDs.
+
+    The values are passed on as given (the fetcher normalizes them), so a
+    checkpoint written for the same command still matches on --resume.
+    """
+    from ..common import normalize_pmcid
+
+    try:
+        for v in value:
+            normalize_pmcid(v)
+    except ValueError as e:
+        raise click.BadParameter(str(e)) from e
+    return value
+
+
 @click.group()
 @click.pass_context
 def europepmc(ctx: click.Context) -> None:
@@ -28,7 +46,12 @@ def europepmc(ctx: click.Context) -> None:
 @click.option("--keyword", multiple=True, help="Keywords to search")
 @click.option("--date-from", help="Start date (YYYY-MM-DD)")
 @click.option("--date-to", help="End date (YYYY-MM-DD)")
-@click.option("--pmcid", multiple=True, help="Specific PMC IDs to fetch")
+@click.option(
+    "--pmcid",
+    multiple=True,
+    callback=_validate_pmcids,
+    help="Specific PMC IDs to fetch",
+)
 @click.option(
     "--max-results", default=None, type=int, help="Maximum results (default: unlimited)"
 )
@@ -178,9 +201,11 @@ def europepmc_fetch(
         text-fetch europepmc fetch --author "hlavacek ws" \\
             --workspace ./my-corpus --out ./output
     """
+    import contextlib
     import logging
     import sys
 
+    from ..common import normalize_pmcid
     from ..config import get_ncbi_api_key, get_setting, load_config
     from ..europepmc import (
         EuropePMCClient,
@@ -331,6 +356,15 @@ def europepmc_fetch(
             seeds = list(client.iter_search(seed_query, max_results=max_results))
             seeds = [s for s in seeds if s.pmcid]
 
+        # A seed with a malformed PMCID was counted as an error when seeds
+        # were fetched; don't send it to the citation API either
+        valid_seeds = []
+        for s in seeds:
+            with contextlib.suppress(ValueError):
+                normalize_pmcid(s.pmcid or "")
+                valid_seeds.append(s)
+        seeds = valid_seeds
+
         if not seeds:
             click.echo("No seed papers with PMCID available for expansion.")
         else:
@@ -453,49 +487,41 @@ def europepmc_fetch(
                 for papers in expansion_result.expanded_papers.values():
                     for paper in papers:
                         exp_type = paper.get("_expansion_type", "")
-                        raw_pmcid = paper.get("pmcid")
+                        source = paper.get("source", "")
+                        paper_id = paper.get("id")
 
+                        # PMCID already present, or a PMC-source record whose
+                        # ID is the PMCID: normalize and track
+                        raw_pmcid = paper.get("pmcid") or (
+                            paper_id if source == "PMC" else None
+                        )
+                        pmcid_norm = None
                         if raw_pmcid:
-                            # PMCID already present - normalize and track
-                            pmcid_norm = str(raw_pmcid).upper()
-                            if not pmcid_norm.startswith("PMC"):
-                                pmcid_norm = f"PMC{pmcid_norm}"
+                            with contextlib.suppress(ValueError):
+                                pmcid_norm = normalize_pmcid(raw_pmcid)
+
+                        if pmcid_norm:
                             if exp_type == "references":
                                 ref_pmcids.append(pmcid_norm)
                             elif exp_type == "citations":
                                 cite_pmcids.append(pmcid_norm)
                             else:
                                 ref_pmcids.append(pmcid_norm)
+                        elif source == "MED" and paper_id:
+                            # Need to look up PMCID: collect for batch lookup
+                            pmid = str(paper_id)
+                            pmids_to_lookup.append(pmid)
+                            if pmid not in pmid_to_paper_info:
+                                pmid_to_paper_info[pmid] = []
+                            pmid_to_paper_info[pmid].append({"exp_type": exp_type})
                         else:
-                            # Need to look up PMCID
-                            source = paper.get("source", "")
-                            paper_id = paper.get("id")
-                            if source == "MED" and paper_id:
-                                # Collect for batch lookup
-                                pmid = str(paper_id)
-                                pmids_to_lookup.append(pmid)
-                                if pmid not in pmid_to_paper_info:
-                                    pmid_to_paper_info[pmid] = []
-                                pmid_to_paper_info[pmid].append({"exp_type": exp_type})
-                            elif source == "PMC" and paper_id:
-                                # PMC source - ID is PMCID
-                                pmcid_norm = str(paper_id).upper()
-                                if not pmcid_norm.startswith("PMC"):
-                                    pmcid_norm = f"PMC{pmcid_norm}"
-                                if exp_type == "references":
-                                    ref_pmcids.append(pmcid_norm)
-                                elif exp_type == "citations":
-                                    cite_pmcids.append(pmcid_norm)
-                                else:
-                                    ref_pmcids.append(pmcid_norm)
+                            # No usable ID - count as no PMCID
+                            if exp_type == "references":
+                                refs_no_pmcid += 1
+                            elif exp_type == "citations":
+                                cites_no_pmcid += 1
                             else:
-                                # No usable ID - count as no PMCID
-                                if exp_type == "references":
-                                    refs_no_pmcid += 1
-                                elif exp_type == "citations":
-                                    cites_no_pmcid += 1
-                                else:
-                                    refs_no_pmcid += 1
+                                refs_no_pmcid += 1
 
                 # Batch lookup for MED papers (the slow part - now fast!)
                 if pmids_to_lookup:
@@ -505,8 +531,11 @@ def europepmc_fetch(
                     # Map results back
                     for pmid, paper_infos in pmid_to_paper_info.items():
                         article = pmid_to_article.get(pmid)
+                        pmcid_found = None
                         if article and article.pmcid:
-                            pmcid_found = article.pmcid
+                            with contextlib.suppress(ValueError):
+                                pmcid_found = normalize_pmcid(article.pmcid)
+                        if pmcid_found:
                             for info in paper_infos:
                                 exp_type = info["exp_type"]
                                 if exp_type == "references":
