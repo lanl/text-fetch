@@ -917,15 +917,18 @@ class TestFromTarball:
         assert extracted is None
 
     def test_fetch_from_tarball_cli_requires_option(self, tmp_path: Path) -> None:
-        """Test that fetch command requires config-file or from-tarball."""
+        """Test that fetch requires --config-file, --from-tarball or --from-plan."""
         from click.testing import CliRunner
         from text_fetch.cli import cli
 
         runner = CliRunner()
         result = runner.invoke(cli, ["fetch", "--out", str(tmp_path)])
 
-        assert result.exit_code != 0
-        assert "Either --config-file or --from-tarball" in result.output
+        # A usage error, naming each input option; checked one by one so that
+        # adding another input option doesn't break the test.
+        assert result.exit_code == 2
+        for option in ("--config-file", "--from-tarball", "--from-plan"):
+            assert option in result.output
 
     def test_fetch_from_tarball_cli_mutually_exclusive(self, tmp_path: Path) -> None:
         """Test that config-file and from-tarball are mutually exclusive."""
