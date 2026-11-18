@@ -1098,6 +1098,9 @@ cat ./output/.expansion_plan.json | jq '.expanded_pmcids | length'
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution and credit guidelines
+and [CONTRIBUTORS.md](CONTRIBUTORS.md) for the contributor list.
+
 ```bash
 # Install with dev dependencies
 uv sync --all-extras
