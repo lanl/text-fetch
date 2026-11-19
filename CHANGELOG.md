@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-19
+
+### Changed
+- The laptop release wheel and the `text-fetch --version` command both report 0.3.3.
+
 ### Fixed
 - **PMC fetches downloaded nothing** - the NCBI ID converter returns `pmid` as an
   integer, so no PMID matched its PMCID and `pmc fetch` (and the `pmc` source of
