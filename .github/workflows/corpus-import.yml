@@ -6,6 +6,8 @@ on:
       - ".github/workflows/corpus-import.yml"
       - "src/text_fetch/**"
       - "tests/test_corpus.py"
+      - "tests/test_corpus_pdf.py"
+      - "tests/fixtures/corpus/**"
       - "pyproject.toml"
       - "uv.lock"
 
@@ -14,7 +16,7 @@ permissions:
 
 jobs:
   import:
-    name: Import Markdown and TXT (${{ matrix.os }})
+    name: Import Markdown, TXT, and PDF (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -30,4 +32,4 @@ jobs:
           python-version: "3.12"
       - run: uv sync --locked --extra dev --no-editable
       - run: uv run --no-sync text-fetch corpus import --help
-      - run: uv run --no-sync pytest -q tests/test_corpus.py
+      - run: uv run --no-sync pytest -q tests/test_corpus.py tests/test_corpus_pdf.py

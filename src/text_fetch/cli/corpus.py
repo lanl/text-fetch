@@ -20,7 +20,7 @@ def corpus() -> None:
     help="JATS archive (.tar.gz or .tgz), or .xml for a single input file.",
 )
 def corpus_import(source: Path, out: Path) -> None:
-    """Convert a Markdown/TXT file or a directory of documents (recursively)."""
+    """Convert a Markdown, TXT, or PDF file or recursively import a directory."""
     from ..corpus import import_corpus
 
     try:

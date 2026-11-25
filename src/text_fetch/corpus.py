@@ -1,4 +1,4 @@
-"""Convert local Markdown and plain-text documents to the JATS used by LitKit."""
+"""Convert local Markdown, plain text, and PDFs to the JATS used by LitKit."""
 
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ from lxml import etree
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
-_SUFFIXES = {".md", ".markdown", ".txt"}
+_TEXT_SUFFIXES = {".md", ".markdown", ".txt"}
+_SUFFIXES = _TEXT_SUFFIXES | {".pdf"}
 _HEADER_KEYS = ("title", "abstract", "summary", "description")
 _HEADER_FIELD = re.compile(r"^(?:" + "|".join(_HEADER_KEYS) + r")[ \t]*:", re.MULTILINE)
 _FRONT_MATTER = re.compile(
@@ -75,7 +76,7 @@ def _markdown_blocks(text: str) -> Iterator[tuple[int, str]]:
 def document_to_jats(text: str, source: Path) -> bytes:
     """Convert one document. The corpus-relative source path identifies it in JATS."""
     suffix = source.suffix.lower()
-    if suffix not in _SUFFIXES:
+    if suffix not in _TEXT_SUFFIXES:
         raise ValueError("Expected a .md, .markdown, or .txt document")
     if "\x00" in text:
         raise ValueError("Expected UTF-8 text without NUL characters")
@@ -97,21 +98,7 @@ def document_to_jats(text: str, source: Path) -> bytes:
         header.get("abstract") or header.get("summary") or header.get("description")
     )
 
-    article = etree.Element("article")
-    meta = etree.SubElement(etree.SubElement(article, "front"), "article-meta")
-    etree.SubElement(
-        meta, "article-id", {"pub-id-type": "publisher-id"}
-    ).text = source.as_posix()
-    titles = etree.SubElement(meta, "title-group")
-    etree.SubElement(titles, "article-title").text = title
-    abstract = etree.SubElement(meta, "abstract")
-    if not summary:
-        sentences = re.split(r"(?<=[.!?])\s+", " ".join(paragraphs), maxsplit=3)
-        summary = " ".join(" ".join(sentences[:3]).split()[:100])
-        abstract.set("abstract-type", "excerpt")
-    etree.SubElement(abstract, "p").text = summary
-
-    body = etree.SubElement(article, "body")
+    body = etree.Element("body")
     sections = [(0, body)]
     for index, (level, value) in enumerate(blocks):
         if not value.strip():
@@ -127,6 +114,26 @@ def document_to_jats(text: str, source: Path) -> bytes:
         else:
             etree.SubElement(sections[-1][1], "p").text = value
 
+    return _serialize_jats(source, title, summary, paragraphs, body)
+
+
+def _serialize_jats(
+    source: Path, title: str, summary: str | None, lead: list[str], body: etree._Element
+) -> bytes:
+    article = etree.Element("article")
+    meta = etree.SubElement(etree.SubElement(article, "front"), "article-meta")
+    etree.SubElement(
+        meta, "article-id", {"pub-id-type": "publisher-id"}
+    ).text = source.as_posix()
+    titles = etree.SubElement(meta, "title-group")
+    etree.SubElement(titles, "article-title").text = title
+    abstract = etree.SubElement(meta, "abstract")
+    if not summary:
+        sentences = re.split(r"(?<=[.!?])\s+", " ".join(lead), maxsplit=3)
+        summary = " ".join(" ".join(sentences[:3]).split()[:100])
+        abstract.set("abstract-type", "excerpt")
+    etree.SubElement(abstract, "p").text = summary
+    article.append(body)
     return etree.tostring(
         article, encoding="UTF-8", xml_declaration=True, pretty_print=True
     )
@@ -134,6 +141,20 @@ def document_to_jats(text: str, source: Path) -> bytes:
 
 def _read_jats(path: Path, relative: Path) -> bytes:
     try:
+        if path.suffix.lower() == ".pdf":
+            from .corpus_pdf import read_pdf, summary_for_pdf
+
+            title, pages = read_pdf(path)
+            summary, lead = summary_for_pdf(title, pages)
+            body = etree.Element("body")
+            for number, paragraphs in enumerate(pages, start=1):
+                section = etree.SubElement(
+                    body, "sec", {"sec-type": "page", "id": f"page-{number}"}
+                )
+                etree.SubElement(section, "label").text = str(number)
+                for paragraph in paragraphs:
+                    etree.SubElement(section, "p").text = " ".join(paragraph.split())
+            return _serialize_jats(relative, title, summary, lead, body)
         return document_to_jats(path.read_text(encoding="utf-8"), relative)
     except ValueError as exc:
         raise ValueError(f"{path}: {exc}") from exc
@@ -160,11 +181,11 @@ def import_corpus(source: Path, output: Path) -> int:
             raise ValueError("XML output requires a single input file")
         files = sorted(_source_files(source))
         if not files:
-            raise ValueError(f"No Markdown or TXT documents found in {source}")
+            raise ValueError(f"No Markdown, TXT, or PDF documents found in {source}")
         root = source
     else:
         if source.suffix.lower() not in _SUFFIXES:
-            raise ValueError(f"Expected a .md, .markdown, or .txt document: {source}")
+            raise ValueError(f"Expected a Markdown, TXT, or PDF document: {source}")
         files = [source]
         root = source.parent
 
