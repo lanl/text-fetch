@@ -72,6 +72,32 @@ uv run text-fetch workspace update --help
 uv run text-fetch config
 ```
 
+### Import local Markdown and text files
+
+Import a folder of UTF-8 `.md`, `.markdown`, and `.txt` files into a JATS archive. The importer runs offline and scans subdirectories. If a file cannot be read or has no body text, the command reports its path and preserves any previous archive. Build the resulting archive in your selected LitKit workspace.
+
+```sh
+text-fetch corpus import ./notes --out ./tars/notes.tar.gz
+litkit --build-only --faiss-writer --tar-dir ./tars --papers-index flat --chunks-index flat
+```
+
+To inspect the JATS for a single document, run `text-fetch corpus import ./notes/setup.md --out ./setup.xml`. Archive members retain their relative source paths, for example `instruments/setup.md.xml`.
+
+The first Markdown heading outside a list or block quote supplies the title. Files without such a heading use the filename stem. To supply your own title and abstract in either format, add YAML front matter at the top of the file.
+
+```markdown
+---
+title: Gauge setup
+abstract: Instructions for positioning and reading the copper rain gauge.
+---
+
+## Placement
+
+Level the base.
+```
+
+`summary` and `description` also work as abstract fields. Without one, the importer copies up to three opening sentences (up to 100 words) into the abstract for stage 1. The full body remains in source order, including short paragraphs and Markdown list items. LitKit 0.3.35 drops body paragraphs shorter than 40 characters during indexing. [LitKit issue #32](https://github.com/lanl/litkit/issues/32)
+
 ### PubMed Central
 
 #### Fetch Articles via E-utilities

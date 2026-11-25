@@ -17,7 +17,7 @@ from ..config import load_config
 @click.version_option(version=__version__, prog_name="text-fetch")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """Acquire scientific literature for RAG pipelines."""
+    """Acquire scientific literature and import local documents for RAG pipelines."""
     # Load config once and store in context for subcommands
     ctx.ensure_object(dict)
     ctx.obj["config"] = load_config()
@@ -55,6 +55,7 @@ def _register_commands() -> None:
         biorxiv,
         chemrxiv,
         compare,
+        corpus,
         europepmc,
         fetch,
         medrxiv,
@@ -65,6 +66,7 @@ def _register_commands() -> None:
     )
 
     cli.add_command(pdf.pdf)
+    cli.add_command(corpus.corpus)
     cli.add_command(pmc.pmc)
     cli.add_command(arxiv.arxiv)
     cli.add_command(biorxiv.biorxiv)
